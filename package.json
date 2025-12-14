@@ -1,12 +1,49 @@
 {
-  "name": "aritech",
+  "name": "aritech-client",
   "version": "1.0.0",
-  "description": "This is a reverse-engineered JavaScript client for communicating with Aritech ATS alarm panels (ATS1500AIP tested).",
+  "description": "JavaScript client for communicating with Aritech ATS alarm panels (ATS1500AIP tested). Supports programmatic usage and CLI.",
   "main": "index.js",
   "type": "module",
+  "exports": {
+    ".": "./index.js"
+  },
+  "bin": {
+    "aritech": "./aritech-cli.js"
+  },
+  "files": [
+    "index.js",
+    "aritech-client.js",
+    "aritech-cli.js",
+    "aritech-monitor.js",
+    "aritech-utils.js",
+    "event-parser.js",
+    "event-types.js",
+    "message-helpers.js",
+    "messages.x500.js",
+    "variableMapping.js",
+    "AreaState.js",
+    "ZoneState.js",
+    "OutputState.js",
+    "TriggerState.js"
+  ],
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
+  "keywords": [
+    "aritech",
+    "ats",
+    "alarm",
+    "panel",
+    "security",
+    "home-automation",
+    "ats1500",
+    "ats2000",
+    "ats3500",
+    "ats4500"
+  ],
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "engines": {
+    "node": ">=18.0.0"
+  }
 }

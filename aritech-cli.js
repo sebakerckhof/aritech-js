@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { AritechClient, AritechError } from './aritech-client.js';
 import { AritechMonitor } from './aritech-monitor.js';
 import { readFileSync } from 'fs';
@@ -66,7 +67,7 @@ if (missingFields.length > 0) {
   console.error('\n❌ Error: Missing required configuration fields:');
   missingFields.forEach(field => console.error(`   - ${field}`));
   console.error('\nPlease provide missing fields either in config.json or via CLI arguments.');
-  console.error('Example: node aritech-cli.js --host 192.168.1.1 --port 32000 --pin 1278 --password 000000000000000000000000 zones');
+  console.error('Example: aritech --host 192.168.1.1 --port 32000 --pin 1278 --password 000000000000000000000000 zones');
   process.exit(1);
 }
 
@@ -79,39 +80,39 @@ const command = args[0];
 // Show help if no command given (without connecting to panel)
 if (!command) {
   console.log('\nAvailable commands:');
-  console.log('  node aritech-cli.js info                 - Show panel description info');
-  console.log('  node aritech-cli.js monitor              - Start monitoring mode (COS events)');
-  console.log('  node aritech-cli.js arm [area] [type] [--force]  - Arm area (default: area 1, type full)');
-  console.log('                                             Types: full, part1, part2');
-  console.log('                                             --force: Force arm despite faults/active zones');
-  console.log('  node aritech-cli.js disarm [area]        - Disarm area (default: 1)');
-  console.log('  node aritech-cli.js zones                - Show zone states');
-  console.log('  node aritech-cli.js areas                - Show area states');
-  console.log('  node aritech-cli.js outputs              - Show output names and states');
-  console.log('  node aritech-cli.js triggers             - Show trigger names and states');
-  console.log('  node aritech-cli.js inhibit <zone>       - Inhibit a zone');
-  console.log('  node aritech-cli.js uninhibit <zone>     - Uninhibit a zone');
-  console.log('  node aritech-cli.js activate <output>    - Activate an output');
-  console.log('  node aritech-cli.js deactivate <output>  - Deactivate an output');
-  console.log('  node aritech-cli.js trigger-activate <trigger>   - Activate a trigger');
-  console.log('  node aritech-cli.js trigger-deactivate <trigger> - Deactivate a trigger');
-  console.log('  node aritech-cli.js eventLog [count]     - Read event log (default: 50 events)');
+  console.log('  aritech info                 - Show panel description info');
+  console.log('  aritech monitor              - Start monitoring mode (COS events)');
+  console.log('  aritech arm [area] [type] [--force]  - Arm area (default: area 1, type full)');
+  console.log('                                 Types: full, part1, part2');
+  console.log('                                 --force: Force arm despite faults/active zones');
+  console.log('  aritech disarm [area]        - Disarm area (default: 1)');
+  console.log('  aritech zones                - Show zone states');
+  console.log('  aritech areas                - Show area states');
+  console.log('  aritech outputs              - Show output names and states');
+  console.log('  aritech triggers             - Show trigger names and states');
+  console.log('  aritech inhibit <zone>       - Inhibit a zone');
+  console.log('  aritech uninhibit <zone>     - Uninhibit a zone');
+  console.log('  aritech activate <output>    - Activate an output');
+  console.log('  aritech deactivate <output>  - Deactivate an output');
+  console.log('  aritech trigger-activate <trigger>   - Activate a trigger');
+  console.log('  aritech trigger-deactivate <trigger> - Deactivate a trigger');
+  console.log('  aritech eventLog [count]     - Read event log (default: 50 events)');
   console.log('\nConfiguration options (override config.json):');
   console.log('  --host <ip>          - Panel IP address');
   console.log('  --port <port>        - Panel port number');
   console.log('  --pin <pin>          - User PIN code');
   console.log('  --password <pwd>     - Encryption password');
   console.log('\nExamples:');
-  console.log('  node aritech-cli.js --host 192.168.1.100 --pin 1234 zones');
-  console.log('  node aritech-cli.js arm 1 full           - Full arm area 1');
-  console.log('  node aritech-cli.js arm 1 part1          - Part arm 1 (set 1)');
-  console.log('  node aritech-cli.js arm 2 part2          - Part arm 2 (set 2)');
-  console.log('  node aritech-cli.js arm part1            - Part arm area 1 (default)');
-  console.log('  node aritech-cli.js arm 1 full --force   - Force full arm area 1');
-  console.log('  node aritech-cli.js outputs              - Show all outputs with states');
-  console.log('  node aritech-cli.js activate 1           - Activate output 1');
-  console.log('  node aritech-cli.js triggers             - Show all triggers with states');
-  console.log('  node aritech-cli.js trigger-activate 1   - Activate trigger 1');
+  console.log('  aritech --host 192.168.1.100 --pin 1234 zones');
+  console.log('  aritech arm 1 full           - Full arm area 1');
+  console.log('  aritech arm 1 part1          - Part arm 1 (set 1)');
+  console.log('  aritech arm 2 part2          - Part arm 2 (set 2)');
+  console.log('  aritech arm part1            - Part arm area 1 (default)');
+  console.log('  aritech arm 1 full --force   - Force full arm area 1');
+  console.log('  aritech outputs              - Show all outputs with states');
+  console.log('  aritech activate 1           - Activate output 1');
+  console.log('  aritech triggers             - Show all triggers with states');
+  console.log('  aritech trigger-activate 1   - Activate trigger 1');
   process.exit(0);
 }
 
@@ -445,8 +446,8 @@ try {
     } else if (command === 'inhibit') {
       const zoneNum = parseInt(args[1]);
       if (!zoneNum || zoneNum < 1) {
-        console.log('Usage: node aritech-cli.js inhibit <zone_number>');
-        console.log('Example: node aritech-cli.js inhibit 12');
+        console.log('Usage: aritech inhibit <zone_number>');
+        console.log('Example: aritech inhibit 12');
       } else {
         console.log(`\nInhibiting zone ${zoneNum}...`);
         try {
@@ -463,8 +464,8 @@ try {
     } else if (command === 'uninhibit') {
       const zoneNum = parseInt(args[1]);
       if (!zoneNum || zoneNum < 1) {
-        console.log('Usage: node aritech-cli.js uninhibit <zone_number>');
-        console.log('Example: node aritech-cli.js uninhibit 12');
+        console.log('Usage: aritech uninhibit <zone_number>');
+        console.log('Example: aritech uninhibit 12');
       } else {
         console.log(`\nUninhibiting zone ${zoneNum}...`);
         try {
@@ -549,8 +550,8 @@ try {
     } else if (command === 'activate') {
       const outputNum = parseInt(args[1]);
       if (!outputNum || outputNum < 1) {
-        console.log('Usage: node aritech-cli.js activate <output_number>');
-        console.log('Example: node aritech-cli.js activate 1');
+        console.log('Usage: aritech activate <output_number>');
+        console.log('Example: aritech activate 1');
       } else {
         console.log(`\nActivating output ${outputNum}...`);
         try {
@@ -567,8 +568,8 @@ try {
     } else if (command === 'deactivate') {
       const outputNum = parseInt(args[1]);
       if (!outputNum || outputNum < 1) {
-        console.log('Usage: node aritech-cli.js deactivate <output_number>');
-        console.log('Example: node aritech-cli.js deactivate 1');
+        console.log('Usage: aritech deactivate <output_number>');
+        console.log('Example: aritech deactivate 1');
       } else {
         console.log(`\nDeactivating output ${outputNum}...`);
         try {
@@ -621,8 +622,8 @@ try {
     } else if (command === 'trigger-activate') {
       const triggerNum = parseInt(args[1]);
       if (!triggerNum || triggerNum < 1) {
-        console.log('Usage: node aritech-cli.js trigger-activate <trigger_number>');
-        console.log('Example: node aritech-cli.js trigger-activate 1');
+        console.log('Usage: aritech trigger-activate <trigger_number>');
+        console.log('Example: aritech trigger-activate 1');
       } else {
         console.log(`\nActivating trigger ${triggerNum}...`);
         try {
@@ -639,8 +640,8 @@ try {
     } else if (command === 'trigger-deactivate') {
       const triggerNum = parseInt(args[1]);
       if (!triggerNum || triggerNum < 1) {
-        console.log('Usage: node aritech-cli.js trigger-deactivate <trigger_number>');
-        console.log('Example: node aritech-cli.js trigger-deactivate 1');
+        console.log('Usage: aritech trigger-deactivate <trigger_number>');
+        console.log('Example: aritech trigger-deactivate 1');
       } else {
         console.log(`\nDeactivating trigger ${triggerNum}...`);
         try {
