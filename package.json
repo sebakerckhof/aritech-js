@@ -1,0 +1,12 @@
+{
+  "name": "aritech",
+  "version": "1.0.0",
+  "description": "This is a reverse-engineered JavaScript client for communicating with Aritech ATS alarm panels (ATS1500AIP tested).",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC"
+}
