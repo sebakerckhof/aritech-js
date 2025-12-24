@@ -42,9 +42,16 @@ function parseConfigArgs(args) {
           config.pin = value;
           i++;
           break;
-        case 'encryptionPassword':
-        case 'password':
+        case 'encryptionKey':
           config.encryptionPassword = value;
+          i++;
+          break;
+        case 'username':
+          config.username = value;
+          i++;
+          break;
+        case 'password':
+          config.password = value;
           i++;
           break;
       }
@@ -60,14 +67,25 @@ const configFromArgs = parseConfigArgs(allArgs);
 const CONFIG = { ...configFromFile, ...configFromArgs };
 
 // Validate required configuration fields
-const requiredFields = ['host', 'port', 'pin', 'encryptionPassword'];
+// For x500 panels: host, port, pin, encryptionKey
+// For x700 panels: host, port, username, encryptionKey (password defaults to username)
+const hasLoginCredentials = CONFIG.pin || CONFIG.username;
+const requiredFields = ['host', 'port', 'encryptionPassword'];
 const missingFields = requiredFields.filter(field => !CONFIG[field]);
 
-if (missingFields.length > 0) {
+if (!hasLoginCredentials) {
+  missingFields.push('pin or username');
+}
+
+// Rename encryptionPassword to encryptionKey for display
+const displayMissing = missingFields.map(f => f === 'encryptionPassword' ? 'encryptionKey' : f);
+
+if (displayMissing.length > 0) {
   console.error('\n❌ Error: Missing required configuration fields:');
-  missingFields.forEach(field => console.error(`   - ${field}`));
+  displayMissing.forEach(field => console.error(`   - ${field}`));
   console.error('\nPlease provide missing fields either in config.json or via CLI arguments.');
-  console.error('Example: aritech --host 192.168.1.1 --port 32000 --pin 1278 --password 000000000000000000000000 zones');
+  console.error('x500 panels: aritech --host 192.168.1.1 --pin 1278 --encryptionKey <key> zones');
+  console.error('x700 panels: aritech --host 192.168.1.1 --username ADMIN --password SECRET --encryptionKey <key> zones');
   process.exit(1);
 }
 
@@ -98,12 +116,19 @@ if (!command) {
   console.log('  aritech trigger-deactivate <trigger> - Deactivate a trigger');
   console.log('  aritech eventLog [count]     - Read event log (default: 50 events)');
   console.log('\nConfiguration options (override config.json):');
-  console.log('  --host <ip>          - Panel IP address');
-  console.log('  --port <port>        - Panel port number');
-  console.log('  --pin <pin>          - User PIN code');
-  console.log('  --password <pwd>     - Encryption password');
+  console.log('  --host <ip>              - Panel IP address');
+  console.log('  --port <port>            - Panel port number');
+  console.log('  --encryptionKey <key>    - Encryption key (24-48 chars)');
+  console.log('');
+  console.log('  x500 panels:');
+  console.log('  --pin <pin>              - User PIN code');
+  console.log('');
+  console.log('  x700 panels:');
+  console.log('  --username <user>        - Login username');
+  console.log('  --password <pwd>         - Login password (defaults to username)');
   console.log('\nExamples:');
-  console.log('  aritech --host 192.168.1.100 --pin 1234 zones');
+  console.log('  aritech --host 192.168.1.100 --pin 1234 --encryptionKey <key> zones');
+  console.log('  aritech --host 192.168.1.100 --username ADMIN --password SECRET --encryptionKey <key> zones');
   console.log('  aritech arm 1 full           - Full arm area 1');
   console.log('  aritech arm 1 part1          - Part arm 1 (set 1)');
   console.log('  aritech arm 2 part2          - Part arm 2 (set 2)');

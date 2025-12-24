@@ -2,7 +2,7 @@
  * TriggerState - Parses triggerStatus into a friendly object
  */
 
-import { messageTemplates } from './messages.x500.js';
+import { messageTemplates } from './messages.js';
 import { getAllProperties as _getAllProperties } from './message-helpers.js';
 
 const getAllProperties = _getAllProperties.bind(null, messageTemplates);

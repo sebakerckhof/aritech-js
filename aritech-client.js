@@ -10,7 +10,7 @@
 import net from 'net';
 import { parseEvent } from './event-parser.js';
 import { createHelperMethods } from './message-helpers.js';
-import { messageTemplates } from './messages.x500.js';
+import { messageTemplates } from './messages.js';
 import {
     SLIP_END,
     slipEncode,
@@ -640,19 +640,32 @@ export class AritechClient {
     }
 
     /**
-     * Login to the panel with configured PIN.
+     * Login to the panel - auto-selects method based on config.
+     * Uses loginWithAccount if username is configured, otherwise loginWithPin.
      * Starts keep-alive timer on success.
      * @returns {Promise<boolean>} True if login successful
      */
     async login() {
-        debug('\n=== Login ===');
+        if (this.config.username) {
+            return this.loginWithAccount();
+        }
+        return this.loginWithPin();
+    }
+
+    /**
+     * Login to the panel with configured PIN (x500 panels).
+     * Starts keep-alive timer on success.
+     * @returns {Promise<boolean>} True if login successful
+     */
+    async loginWithPin() {
+        debug('\n=== Login (PIN) ===');
         debug(`PIN: ${this.config.pin}`);
 
-        // Login message
+        // Login message for x500 panels
         // Panel automatically sends COS events to all connected clients
         // userAction flags indicate requested permissions
         // connectionMethod: 3 = MobileApps (from ConnectionMethod enum)
-        const loginPayload = constructMessage('login', {
+        const loginPayload = constructMessage('loginWithPin', {
             canUpload: true,
             canDownload: false,
             canControl: true,
@@ -661,6 +674,52 @@ export class AritechClient {
             canReadLogs: true,
             pinCode: this.config.pin.toString(),
             connectionMethod: 0x03
+        });
+
+        const response = await this.callEncrypted(loginPayload, this.sessionKey);
+
+        if (!response) {
+            throw new Error('Failed to decrypt login response');
+        }
+
+        // Check response code
+        // Success: a0 00 00 (header + msgId 0 + status 0)
+        if (response[0] === HEADER.RESPONSE && response.length >= 3) {
+            if (response[2] === 0x00) {
+                debug('✓ Login successful!');
+                this._startKeepAlive();
+                return true;
+            } else {
+                debug(`Login failed with code: ${response[2]}`);
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Login to the panel with username/password (x700 panels).
+     * Starts keep-alive timer on success.
+     * @returns {Promise<boolean>} True if login successful
+     */
+    async loginWithAccount() {
+        debug('\n=== Login (Account) ===');
+        debug(`Username: ${this.config.username}`);
+
+        // Login message for x700 panels
+        // Uses username/password instead of PIN
+        // connectionMethod: 1 = TCP/IP
+        const loginPayload = constructMessage('loginWithAccount', {
+            canUpload: true,
+            canDownload: false,
+            canControl: true,
+            canMonitor: true,
+            canDiagnose: false,
+            canReadLogs: false,
+            username: this.config.username,
+            password: this.config.password || this.config.username,  // Default password to username if not set
+            connectionMethod: 0x01
         });
 
         const response = await this.callEncrypted(loginPayload, this.sessionKey);

@@ -19,7 +19,7 @@
     "event-parser.js",
     "event-types.js",
     "message-helpers.js",
-    "messages.x500.js",
+    "messages.js",
     "variableMapping.js",
     "AreaState.js",
     "ZoneState.js",

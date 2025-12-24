@@ -4,13 +4,63 @@
  * Low-level utilities for CRC, SLIP framing, and AES encryption.
  *
  * Protocol details:
- * - AES-128-CTR encryption (not ECB!)
+ * - AES-CTR encryption (128, 192, or 256 bit keys)
  * - Frame structure: [8-byte nonce][encrypted payload + CRC]
  * - IV = [nonce 8 bytes][serial 6 bytes][padding 2 bytes]
  * - CRC-16 polynomial 0xA001, init 0xFFFF, big-endian
  */
 
 import crypto from 'crypto';
+
+// ============================================================================
+// ENCRYPTION MODE CONSTANTS
+// ============================================================================
+
+/**
+ * Encryption modes supported by the panel
+ */
+export const EncryptionMode = {
+    NONE: 0,
+    AES_128: 1,
+    AES_192: 2,  // Note: Panel may report this as AES_256
+    AES_256: 2,  // Panel reports 2 for AES-256
+};
+
+/**
+ * Get the required password length for an encryption mode
+ * @param {number} mode - Encryption mode
+ * @returns {number} Required password length (24, 36, or 48 chars)
+ */
+export function getPasswordLength(mode) {
+    switch (mode) {
+        case EncryptionMode.AES_128:
+            return 24;
+        case EncryptionMode.AES_192:
+            return 36;
+        case EncryptionMode.AES_256:
+            return 48;
+        default:
+            return 24;
+    }
+}
+
+/**
+ * Get the AES cipher name based on key size
+ * @param {number} keySize - Key size in bytes (16, 24, or 32)
+ * @returns {string} Node.js crypto cipher name
+ */
+export function getAesCipherName(keySize) {
+    switch (keySize) {
+        case 16:
+            return 'aes-128-ecb';
+        case 24:
+            return 'aes-192-ecb';
+        case 32:
+            return 'aes-256-ecb';
+        default:
+            throw new Error(`Invalid AES key size: ${keySize}. Must be 16, 24, or 32 bytes.`);
+    }
+}
 
 // ============================================================================
 // SLIP FRAMING
@@ -127,14 +177,26 @@ function grayPack(value) {
 }
 
 /**
- * Derive encryption key from 24-character password
- * @param {string} password - 24-character encryption password
- * @returns {Buffer} 16-byte encryption key
+ * Derive encryption key from password.
+ *
+ * Password length determines key size:
+ * - 24 chars (2 parts × 12) → 16-byte key (AES-128)
+ * - 36 chars (3 parts × 12) → 24-byte key (AES-192)
+ * - 48 chars (4 parts × 12) → 32-byte key (AES-256)
+ *
+ * @param {string} password - Encryption password (24, 36, or 48 characters)
+ * @returns {Buffer} Encryption key (16, 24, or 32 bytes)
  */
 export function makeEncryptionKey(password) {
     if (!password || password.length < 24) return Buffer.alloc(16);
-    const result = Buffer.alloc(16);
-    [password.substring(0, 12), password.substring(12, 24)].forEach((part, partIndex) => {
+
+    // Determine number of 12-character parts based on password length
+    const numParts = Math.min(Math.floor(password.length / 12), 4);
+    const keySize = numParts * 8;  // 8 bytes per part
+    const result = Buffer.alloc(keySize);
+
+    for (let partIndex = 0; partIndex < numParts; partIndex++) {
+        const part = password.substring(partIndex * 12, (partIndex + 1) * 12);
         const chars = Buffer.from(part, 'ascii');
         const offset = partIndex * 8;
         result[offset + 0] = grayPack((chars[0] << 4) | (chars[1] >> 4));
@@ -145,7 +207,7 @@ export function makeEncryptionKey(password) {
         result[offset + 5] = grayPack(((chars[7] & 0xF) << 8) | chars[8]);
         result[offset + 6] = grayPack((chars[9] << 4) | (chars[10] >> 4));
         result[offset + 7] = grayPack(((chars[10] & 0xF) << 8) | chars[11]);
-    });
+    }
     return result;
 }
 
@@ -196,17 +258,9 @@ export function decodeSerial(serial) {
 }
 
 // ============================================================================
-// AES-128-CTR MODE
+// PROTOCOL VERSION
 // ============================================================================
 
-/**
- * AES-128-CTR encryption/decryption
- * @param {Buffer} data - Data to encrypt/decrypt
- * @param {Buffer} key - 16-byte encryption key
- * @param {Buffer} nonce - 8-byte nonce
- * @param {Buffer} serialBytes - 6-byte decoded serial
- * @returns {Buffer} Encrypted/decrypted data
- */
 /**
  * Calculate protocol version from firmware string.
  * @param {string} firmware - Firmware version string (e.g., "MR_4.1.38741")
@@ -242,6 +296,21 @@ export function calculateProtocolVersion(firmware) {
     }
 }
 
+// ============================================================================
+// AES-CTR MODE (128/192/256 bit)
+// ============================================================================
+
+/**
+ * AES-CTR encryption/decryption.
+ *
+ * Supports AES-128, AES-192, and AES-256 based on key size.
+ *
+ * @param {Buffer} data - Data to encrypt/decrypt
+ * @param {Buffer} key - Encryption key (16, 24, or 32 bytes)
+ * @param {Buffer} nonce - 8-byte nonce
+ * @param {Buffer} serialBytes - 6-byte decoded serial
+ * @returns {Buffer} Encrypted/decrypted data
+ */
 export function aesCtr(data, key, nonce, serialBytes) {
     // IV = [nonce 8 bytes][serial 6 bytes][padding 2 bytes]
     const iv = Buffer.alloc(16);
@@ -249,11 +318,14 @@ export function aesCtr(data, key, nonce, serialBytes) {
     serialBytes.copy(iv, 8, 0, 6);
     // bytes 14-15 stay 0
 
+    // Select cipher based on key size
+    const cipherName = getAesCipherName(key.length);
+
     const result = Buffer.alloc(data.length);
     const blockSize = 16;
 
     for (let block = 0; block * blockSize < data.length; block++) {
-        const cipher = crypto.createCipheriv('aes-128-ecb', key, null);
+        const cipher = crypto.createCipheriv(cipherName, key, null);
         cipher.setAutoPadding(false);
         const keystream = cipher.update(iv);
 
@@ -288,7 +360,7 @@ export function generateNonce() {
 /**
  * Encrypt a message payload (adds CRC, encrypts, prepends nonce)
  * @param {Buffer} payload - Message payload to encrypt
- * @param {Buffer} key - 16-byte encryption key
+ * @param {Buffer} key - Encryption key (16, 24, or 32 bytes for AES-128/192/256)
  * @param {Buffer} serialBytes - 6-byte decoded serial
  * @returns {Buffer} Encrypted frame: [nonce][encrypted(payload + CRC)]
  */
@@ -302,7 +374,7 @@ export function encryptMessage(payload, key, serialBytes) {
 /**
  * Decrypt a received frame (extracts nonce, decrypts, verifies CRC)
  * @param {Buffer} frame - SLIP-encoded frame to decrypt
- * @param {Buffer} key - 16-byte encryption key
+ * @param {Buffer} key - Encryption key (16, 24, or 32 bytes for AES-128/192/256)
  * @param {Buffer} serialBytes - 6-byte decoded serial
  * @returns {Buffer|null} Decrypted payload (without CRC), or null if invalid
  */

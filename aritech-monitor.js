@@ -7,7 +7,7 @@
 
 import { EventEmitter } from 'events';
 import { constructMessage as _constructMessage } from './message-helpers.js';
-import { messageTemplates } from './messages.x500.js';
+import { messageTemplates } from './messages.js';
 
 // Bind constructMessage to our templates
 const constructMessage = (name, params = {}) => _constructMessage(messageTemplates, name, params);
