@@ -12,7 +12,8 @@ Note that protocol behavior may vary based on panel firmware version. This libra
 
 ## Installation
 
-Clone the repository and configure `config.json` with your panel settings:
+Clone the repository and rename `config.json.example` to `config.json`.
+Then configure `config.json` with your panel settings:
 
 ```json
 {
