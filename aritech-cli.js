@@ -43,7 +43,7 @@ function parseConfigArgs(args) {
           i++;
           break;
         case 'encryptionKey':
-          config.encryptionPassword = value;
+          config.encryptionKey = value;
           i++;
           break;
         case 'username':
@@ -70,19 +70,16 @@ const CONFIG = { ...configFromFile, ...configFromArgs };
 // For x500 panels: host, port, pin, encryptionKey
 // For x700 panels: host, port, username, encryptionKey (password defaults to username)
 const hasLoginCredentials = CONFIG.pin || CONFIG.username;
-const requiredFields = ['host', 'port', 'encryptionPassword'];
+const requiredFields = ['host', 'port', 'encryptionKey'];
 const missingFields = requiredFields.filter(field => !CONFIG[field]);
 
 if (!hasLoginCredentials) {
   missingFields.push('pin or username');
 }
 
-// Rename encryptionPassword to encryptionKey for display
-const displayMissing = missingFields.map(f => f === 'encryptionPassword' ? 'encryptionKey' : f);
-
-if (displayMissing.length > 0) {
+if (missingFields.length > 0) {
   console.error('\n❌ Error: Missing required configuration fields:');
-  displayMissing.forEach(field => console.error(`   - ${field}`));
+  missingFields.forEach(field => console.error(`   - ${field}`));
   console.error('\nPlease provide missing fields either in config.json or via CLI arguments.');
   console.error('x500 panels: aritech --host 192.168.1.1 --pin 1278 --encryptionKey <key> zones');
   console.error('x700 panels: aritech --host 192.168.1.1 --username ADMIN --password SECRET --encryptionKey <key> zones');
@@ -92,7 +89,9 @@ if (displayMissing.length > 0) {
 const client = new AritechClient(CONFIG);
 
 // Get the command (first non-config argument)
-const args = process.argv.slice(2).filter(arg => !arg.startsWith('--') && !Object.values(configFromArgs).includes(arg));
+// Convert configFromArgs values to strings for comparison since port is parsed as int
+const configValues = Object.values(configFromArgs).map(v => String(v));
+const args = process.argv.slice(2).filter(arg => !arg.startsWith('--') && !configValues.includes(arg));
 const command = args[0];
 
 // Show help if no command given (without connecting to panel)

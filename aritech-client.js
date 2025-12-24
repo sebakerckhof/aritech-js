@@ -172,7 +172,7 @@ export class AritechClient {
         this.eventListeners = [];  // For COS events
         this.responseQueue = [];   // Queue for non-COS responses
 
-        this.initialKey = makeEncryptionKey(config.encryptionPassword);
+        this.initialKey = makeEncryptionKey(config.encryptionKey);
         this.serialBytes = null;  // Set after getDescription
         this.sessionKey = null;   // Set after key exchange
 
