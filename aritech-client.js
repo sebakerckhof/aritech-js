@@ -171,6 +171,7 @@ export class AritechClient {
         this.pendingResolve = null;
         this.eventListeners = [];  // For COS events
         this.responseQueue = [];   // Queue for non-COS responses
+        this._commandLock = Promise.resolve();
 
         this.initialKey = makeEncryptionKey(config.encryptionKey);
         this.serialBytes = null;  // Set after getDescription
@@ -318,12 +319,12 @@ export class AritechClient {
                 }
             }
 
-            // Check if this is an unsolicited COS event FIRST
-            // If it's COS, handle it and DON'T pass to pendingResolve
-            const isCOS = this.checkForCOSEvent(frame);
+            // Check if this is an unsolicited message (COS or other panel notification)
+            // Unsolicited messages have header 0xC0 - don't treat them as responses
+            const isUnsolicited = this.checkForUnsolicitedMessage(frame);
 
-            if (isCOS) {
-                // COS event handled, don't queue it
+            if (isUnsolicited) {
+                // Unsolicited message handled (or logged), don't queue it as a response
                 continue;
             }
 
@@ -341,30 +342,39 @@ export class AritechClient {
     }
 
     /**
-     * Check if a received frame is a Change of State (COS) event.
-     * If it is, notifies all registered event listeners.
+     * Check if a received frame is an unsolicited message from the panel.
+     * Unsolicited messages have header 0xC0 (request from panel to client).
+     * If it's a COS event, notifies all registered event listeners.
+     * If it's another unsolicited message type, logs a warning.
      * @private
      * @param {Buffer} frame - SLIP-encoded frame to check
-     * @returns {boolean} True if frame was a COS event
+     * @returns {boolean} True if frame was an unsolicited message (not a response)
      */
-    checkForCOSEvent(frame) {
-        if (!this.monitoringActive || !this.sessionKey) return false;
+    checkForUnsolicitedMessage(frame) {
+        if (!this.sessionKey) return false;
 
         try {
             const decrypted = decryptMessage(frame, this.sessionKey, this.serialBytes);
-            if (!decrypted || decrypted.length < 3) {
-                // Debug: couldn't decrypt or too short
+            if (!decrypted || decrypted.length < 2) {
                 return false;
             }
 
-            // Check for Message ID 37 (COS notification)
-            // Format: [0xC0 header][0xCA 0x00 varint msgId 37][payload...]
-            if (decrypted[0] === 0xC0 && decrypted[1] === 0xCA && decrypted[2] === 0x00) {
+            // Check if this is an unsolicited message (header 0xC0 = request from panel)
+            // Responses have header 0xA0, errors have 0xF0
+            if (decrypted[0] !== HEADER.REQUEST) {
+                return false; // This is a response (0xA0) or error (0xF0), not unsolicited
+            }
+
+            // This is an unsolicited message from the panel (header 0xC0)
+            // Check if it's a COS message (0xCA prefix = COS message type)
+            if (decrypted.length >= 3 && decrypted[1] === 0xCA) {
+                const cosType = decrypted[2];
                 const payload = decrypted.slice(3);
                 const statusByte = payload.length >= 3 ? payload[2] : null;
 
                 debug(`\n━━━ COS Event Received ━━━`);
                 debug(`Time: ${new Date().toISOString()}`);
+                debug(`COS type: 0x${cosType.toString(16).padStart(2, '0')}`);
                 debug(`Status byte: 0x${statusByte ? statusByte.toString(16).padStart(2, '0') : '??'}`);
                 debug(`Full payload: ${payload.toString('hex')}`);
 
@@ -388,13 +398,20 @@ export class AritechClient {
                     });
                 });
 
-                return true; // This was a COS event
+                return true; // This was an unsolicited COS event
             }
+
+            // Unsolicited message but not a COS - log it
+            const msgIdByte = decrypted[1];
+            console.warn(`Received unsolicited message from panel (no handler): msgId=0x${msgIdByte.toString(16).padStart(2, '0')}, data=${decrypted.toString('hex')}`);
+            return true; // Still unsolicited, don't treat as response
+
         } catch (err) {
-            // Ignore decryption errors for non-COS frames
+            // Decryption failed - might be using wrong key or corrupted frame
+            // Don't treat as unsolicited
         }
 
-        return false; // Not a COS event
+        return false;
     }
 
     /**
@@ -406,16 +423,31 @@ export class AritechClient {
     }
 
     /**
-     * Wait for and receive the next response frame.
+     * Serialize command traffic to avoid interleaved writes/responses.
+     * @private
+     */
+    async _withCommandLock(fn) {
+        const previous = this._commandLock;
+        let release;
+        this._commandLock = new Promise((resolve) => { release = resolve; });
+        await previous.catch(() => undefined);
+        try {
+            return await fn();
+        } finally {
+            release();
+        }
+    }
+
+    /**
+     * Create a response waiter before sending a request.
      * @private
      * @param {number} timeout - Timeout in milliseconds
      * @returns {Promise<Buffer>} Received frame
      * @throws {Error} If timeout expires
      */
-    async receiveFrame(timeout = 5000) {
-        // Check if we already have a queued response
-        if (this.responseQueue.length > 0) {
-            return this.responseQueue.shift();
+    _createResponseWaiter(timeout = 5000) {
+        if (this.pendingResolve) {
+            throw new Error('Response already pending');
         }
 
         return new Promise((resolve, reject) => {
@@ -427,6 +459,13 @@ export class AritechClient {
                 clearTimeout(timer);
                 resolve(frame);
             };
+
+            if (this.responseQueue.length > 0 && this.pendingResolve) {
+                const responseFrame = this.responseQueue.shift();
+                const pending = this.pendingResolve;
+                this.pendingResolve = null;
+                pending(responseFrame);
+            }
         });
     }
 
@@ -436,10 +475,22 @@ export class AritechClient {
      * @param {Buffer} payload - Message payload to send
      * @param {Buffer} key - Encryption key (16 bytes)
      */
-    sendEncrypted(payload, key) {
+    _sendEncryptedUnlocked(payload, key) {
         const frame = slipEncode(encryptMessage(payload, key, this.serialBytes));
         debug(`SEND (${frame.length} bytes): ${frame.toString('hex')}`);
         this.socket.write(frame);
+    }
+
+    /**
+     * Send an encrypted message without waiting for response.
+     * @private
+     * @param {Buffer} payload - Message payload to send
+     * @param {Buffer} key - Encryption key (16 bytes)
+     */
+    sendEncrypted(payload, key) {
+        return this._withCommandLock(async () => {
+            this._sendEncryptedUnlocked(payload, key);
+        });
     }
 
     /**
@@ -453,8 +504,10 @@ export class AritechClient {
      * @throws {AritechError} If panel returns error and throwOnError is true
      */
     async callEncrypted(payload, key, { throwOnError = true } = {}) {
-        this.sendEncrypted(payload, key);
-        const response = await this.receiveFrame();
+        return this._withCommandLock(async () => {
+            const responsePromise = this._createResponseWaiter();
+            this._sendEncryptedUnlocked(payload, key);
+            const response = await responsePromise;
         debug(`RECV (${response.length} bytes): ${response.toString('hex')}`);
         const decrypted = decryptMessage(response, key, this.serialBytes);
         debug(`Decrypted response: ${decrypted.toString('hex')}`);
@@ -472,6 +525,7 @@ export class AritechClient {
             }
         }
         return decrypted;
+        });
     }
 
     /**
@@ -479,7 +533,7 @@ export class AritechClient {
      * @private
      * @param {Buffer} payload - Message payload to send
      */
-    async sendPlain(payload) {
+    _sendPlainUnlocked(payload) {
         const frame = slipEncode(appendCrc(payload));
         debug(`SEND (${frame.length} bytes): ${frame.toString('hex')}`);
         this.socket.write(frame);
@@ -496,8 +550,10 @@ export class AritechClient {
      * @throws {AritechError} If CRC invalid or panel returns error
      */
     async callPlain(payload, { throwOnError = true } = {}) {
-        this.sendPlain(payload);
-        const response = await this.receiveFrame();
+        return this._withCommandLock(async () => {
+            const responsePromise = this._createResponseWaiter();
+            this._sendPlainUnlocked(payload);
+            const response = await responsePromise;
         debug(`RECV (${response.length} bytes): ${response.toString('hex')}`);
         const decoded = slipDecode(response);
         if (!verifyCrc(decoded)) {
@@ -521,6 +577,7 @@ export class AritechClient {
             }
         }
         return result;
+        });
     }
 
 
