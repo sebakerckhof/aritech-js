@@ -3,3 +3,5 @@ __pycache__/
 *.egg-info
 variableMapping.js
 config.json
+config.x700.json
+config.x500.json

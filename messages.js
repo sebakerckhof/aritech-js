@@ -186,36 +186,33 @@ export const messageTemplates = {
         }
     },
     // x700 panels: Username/password login (device.getLogPassConnect)
-    // Based on DRV template - payloadLength 79 bytes (including msgId byte)
-    // Byte layout: [0x06][0x0f][0x06][typeId][6 permission flags][32-byte username][0x20 len][32-byte password][connMethod][connMethodExt][RFU]
-    // Note: byte offsets are 1-indexed from after header (byte 0 = msgId, byte 1 = templateBytes[0], etc.)
-    // The 6th permission (canReadLogs) at byte 9 defaults to 0x20 which also serves as username field size indicator
+    // Based on mobile app capture - payloadLength 79 bytes (including msgId byte)
+    // Byte layout: [0x06][0x0f][0x06][6 permission flags][0x20 usrlen][32-byte username][0x20 pwdlen][32-byte password][connMethod][connMethodExt][RFU]
+    // Mobile app payload: 060f06 010001010101 20 cccc...32bytes... 20 cccc...32bytes... 030000
     'loginWithAccount': {
         msgId: 3,
         msgIdBytes: [0x06],
         templateBytes: [
             0x06, 0x0f, 0x06,  // templateBytes 0-2: sub-type markers
-            0x00,              // templateBytes 3: typeId
-            0x00, 0x00, 0x00, 0x00, 0x00,  // templateBytes 4-8: 5 permission flags (upload, download, control, monitor, diagnose)
-            0x20,              // templateBytes 9: canReadLogs permission (default 0x20 = enabled, also indicates 32-byte username)
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // templateBytes 3-8: 6 permission flags (upload, download, control, monitor, diagnose, readLogs)
+            0x20,              // templateBytes 9: username length marker (0x20 = 32, fixed)
             ...Array(32).fill(0x00),  // templateBytes 10-41: username (32 bytes, null-padded)
-            0x20,              // templateBytes 42: password length marker (0x20 = 32)
+            0x20,              // templateBytes 42: password length marker (0x20 = 32, fixed)
             ...Array(32).fill(0x00),  // templateBytes 43-74: password (32 bytes, null-padded)
             0x00, 0x00, 0x00   // templateBytes 75-77: connMethod, connMethodExt, RFU
         ],
         payloadLength: 79,  // including msgId byte
         properties: {
-            // Byte offsets: buffer[byteOffset + 1] = templateBytes[byteOffset - 1] since msgId is at buffer[1]
+            // Byte offsets are relative to after header (byte 0 = msgId), so bufferIndex = byteOffset + 1
             // Use type: 'byte' for single-byte values to prevent 2-byte writes
-            'typeId': [{ byte: 4, mask: 0xFF, type: 'byte' }],            // templateBytes[3]
-            'canUpload': [{ byte: 5, mask: 0xFF, type: 'byte' }],         // templateBytes[4]
-            'canDownload': [{ byte: 6, mask: 0xFF, type: 'byte' }],       // templateBytes[5]
-            'canControl': [{ byte: 7, mask: 0xFF, type: 'byte' }],        // templateBytes[6]
-            'canMonitor': [{ byte: 8, mask: 0xFF, type: 'byte' }],        // templateBytes[7]
-            'canDiagnose': [{ byte: 9, mask: 0xFF, type: 'byte' }],       // templateBytes[8]
-            'canReadLogs': [{ byte: 10, mask: 0xFF, type: 'byte' }],      // templateBytes[9] - defaults to 0x20
-            'username': [{ byte: 11, mask: 0xFF, length: 32 }],           // templateBytes[10-41]
-            'password': [{ byte: 44, mask: 0xFF, length: 32 }],           // templateBytes[43-74]
+            'canUpload': [{ byte: 4, mask: 0xFF, type: 'byte' }],         // templateBytes[3]
+            'canDownload': [{ byte: 5, mask: 0xFF, type: 'byte' }],       // templateBytes[4]
+            'canControl': [{ byte: 6, mask: 0xFF, type: 'byte' }],        // templateBytes[5]
+            'canMonitor': [{ byte: 7, mask: 0xFF, type: 'byte' }],        // templateBytes[6]
+            'canDiagnose': [{ byte: 8, mask: 0xFF, type: 'byte' }],       // templateBytes[7]
+            'canReadLogs': [{ byte: 9, mask: 0xFF, type: 'byte' }],       // templateBytes[8]
+            'username': [{ byte: 11, mask: 0xFF, length: 32 }],           // templateBytes[10-41], skip len marker at byte 10
+            'password': [{ byte: 44, mask: 0xFF, length: 32 }],           // templateBytes[43-74], skip len marker at byte 43
             'connectionMethod': [{ byte: 76, mask: 0xFF, type: 'byte' }],       // templateBytes[75]
             'connectionMethodExtended': [{ byte: 77, mask: 0xFF, type: 'byte' }], // templateBytes[76]
             'reservedForFutureUse': [{ byte: 78, mask: 0xFF, type: 'byte' }]    // templateBytes[77]
@@ -858,6 +855,28 @@ export const messageTemplates = {
             'index': [{ byte: 5, mask: 0xFF }]
         }
     },
+    // Extended format for name queries (x700 panels and x500 panels with protocol 4.4+)
+    // Uses 0x19 message ID (same as response), 30-byte names, 4 names per page
+    'getAreaNamesExtended': {
+        msgId: -13,
+        msgIdBytes: [0x19],
+        templateBytes: [0x02, 0x00, 0x03, 0x00, 0x00],
+        payloadLength: 6,
+        properties: {
+            'typeId': [{ byte: 3, mask: 0xFF }],
+            'index': [{ byte: 5, mask: 0xFF }]
+        }
+    },
+    'getZoneNamesExtended': {
+        msgId: -13,
+        msgIdBytes: [0x19],
+        templateBytes: [0x01, 0x00, 0x03, 0x00, 0x00],
+        payloadLength: 6,
+        properties: {
+            'typeId': [{ byte: 3, mask: 0xFF }],
+            'index': [{ byte: 5, mask: 0xFF }]
+        }
+    },
     'selectLogEntry': {
         msgId: -2,
         msgIdBytes: [0x03],
@@ -867,6 +886,14 @@ export const messageTemplates = {
             'typeId': [{ byte: 3, mask: 0xFF }],
             'logReadingDirection': [{ byte: 4, mask: 0xFF }]
         }
+    },
+    // x700 panels require start.MONITOR before reading event logs
+    'startMonitor': {
+        msgId: -101,
+        msgIdBytes: [0xc9, 0x01],
+        templateBytes: [0x00, 0x00],
+        payloadLength: 4,
+        properties: {}
     },
     'getControlSessionStatus': {
         msgId: 39,

@@ -82,10 +82,14 @@ const CC_STATUS = {
     PartSet2Set: 0x1005,
 };
 
-// Response parsing constants
+// Response parsing constants for standard format (x500 panels with protocol < 4.4)
 const NAMES_START_OFFSET = 6;  // Offset where names begin in getName responses
 const NAME_LENGTH = 16;        // Each name is 16 bytes, null-padded
 const NAMES_PER_PAGE = 16;     // Panel returns 16 names per request
+
+// Response parsing constants for extended format (x700 panels and x500 panels with protocol 4.4+)
+const EXTENDED_NAME_LENGTH = 30;   // Extended format uses 30-byte names
+const EXTENDED_NAMES_PER_PAGE = 4; // Extended format returns 4 names per request
 
 // Debug logging helper
 const DEBUG = process.env.LOG_LEVEL === 'debug';
@@ -208,11 +212,14 @@ export class AritechClient {
         switch (this.panelModel) {
             case 'ATS1000':
             case 'ATS1500':
+            case 'ATS1700':
                 return 4;
             case 'ATS2000':
             case 'ATS3500':
+            case 'ATS3700':
                 return 8;
             case 'ATS4500':
+            case 'ATS4700':
                 return 64;
             default:
                 return 4; // Default fallback
@@ -229,14 +236,26 @@ export class AritechClient {
             case 'ATS2000':
                 return 368;
             case 'ATS1500':
+            case 'ATS1700':
                 return 240;
             case 'ATS3500':
+            case 'ATS3700':
                 return 496;
             case 'ATS4500':
+            case 'ATS4700':
                 return 976;
             default:
                 return 240; // Default fallback
         }
+    }
+
+    /**
+     * Check if this is an x700 series panel.
+     * x700 panels (ATS1700, ATS3700, ATS4700) use different message formats.
+     * @returns {boolean} True if x700 panel
+     */
+    isX700Panel() {
+        return this.panelModel && /ATS\d700/.test(this.panelModel);
     }
 
     /**
@@ -766,17 +785,18 @@ export class AritechClient {
 
         // Login message for x700 panels
         // Uses username/password instead of PIN
-        // connectionMethod: 1 = TCP/IP
+        // connectionMethod: 3 = MobileApps (matches mobile app capture)
+        // All permissions set to true except canDownload (matches mobile app for zone control)
         const loginPayload = constructMessage('loginWithAccount', {
             canUpload: true,
             canDownload: false,
             canControl: true,
             canMonitor: true,
-            canDiagnose: false,
-            canReadLogs: false,
+            canDiagnose: true,
+            canReadLogs: true,
             username: this.config.username,
             password: this.config.password || this.config.username,  // Default password to username if not set
-            connectionMethod: 0x01
+            connectionMethod: 0x03
         });
 
         const response = await this.callEncrypted(loginPayload, this.sessionKey);
@@ -790,6 +810,10 @@ export class AritechClient {
         if (response[0] === HEADER.RESPONSE && response.length >= 3) {
             if (response[2] === 0x00) {
                 debug('✓ Login successful!');
+
+                // x700 panels require getUserInfo call after login to activate session permissions
+                await this._getUserInfo();
+
                 this._startKeepAlive();
                 return true;
             } else {
@@ -799,6 +823,27 @@ export class AritechClient {
         }
 
         return false;
+    }
+
+    /**
+     * Get user info from panel - required on x700 after login to activate permissions.
+     * @private
+     */
+    async _getUserInfo() {
+        debug('\n=== Getting User Info ===');
+        const payload = constructMessage('getUserInfo', {});
+        const response = await this.callEncrypted(payload, this.sessionKey);
+
+        if (response && response[0] === HEADER.RESPONSE) {
+            // Response contains user name at offset 6, 16 bytes
+            if (response.length >= 22) {
+                const userName = response.slice(6, 22).toString('ascii').replace(/\0+$/, '').trim();
+                if (userName) {
+                    debug(`Logged in as: ${userName}`);
+                }
+            }
+            debug('✓ User session activated');
+        }
     }
 
     /**
@@ -834,7 +879,7 @@ export class AritechClient {
 
     /**
      * Generic helper for fetching entity names from the panel.
-     * Handles pagination in batches of 16.
+     * Handles pagination in batches (16 for x500, 4 for x700).
      * @private
      * @param {string} msgName - Message name for the request (e.g., 'getAreaNames')
      * @param {string} responseName - Response message name (e.g., 'areaNames')
@@ -849,30 +894,43 @@ export class AritechClient {
 
         const results = [];
 
+        // Use extended format parameters if applicable
+        // x700 panels and x500 panels with protocol 4.4+ use "Ext" format for areas and zones (30-byte names, 4 per page)
+        // Outputs and triggers use the standard format (16-byte names, 16 per page)
+        const supportsExtendedNames = this.isX700Panel() || (this.protocolVersion && this.protocolVersion >= 4004);  // Protocol 4.4+
+        const hasExtendedFormat = supportsExtendedNames && (msgName === 'getAreaNames' || msgName === 'getZoneNames');
+        const nameLength = hasExtendedFormat ? EXTENDED_NAME_LENGTH : NAME_LENGTH;
+        const namesPerPage = hasExtendedFormat ? EXTENDED_NAMES_PER_PAGE : NAMES_PER_PAGE;
+        const actualMsgName = hasExtendedFormat ? msgName + 'Extended' : msgName;
+
+        if (hasExtendedFormat) {
+            debug(`Using extended format: ${actualMsgName}, ${nameLength}-byte names, ${namesPerPage} per page`);
+        }
+
         // Determine which pages to request
         let pagesToRequest = [];
         if (validNumbers && validNumbers.length > 0) {
             // Only request pages containing valid numbers
             const pageSet = new Set();
             for (const num of validNumbers) {
-                const pageStart = Math.floor((num - 1) / NAMES_PER_PAGE) * NAMES_PER_PAGE + 1;
+                const pageStart = Math.floor((num - 1) / namesPerPage) * namesPerPage + 1;
                 pageSet.add(pageStart);
             }
             pagesToRequest = Array.from(pageSet).sort((a, b) => a - b);
         } else if (maxCount) {
             // Request pages up to maxCount
-            for (let i = 1; i <= maxCount; i += NAMES_PER_PAGE) {
+            for (let i = 1; i <= maxCount; i += namesPerPage) {
                 pagesToRequest.push(i);
             }
         } else {
             // Request pages until empty (output/trigger style)
-            for (let i = 1; i <= 256; i += NAMES_PER_PAGE) {
+            for (let i = 1; i <= 256; i += namesPerPage) {
                 pagesToRequest.push(i);
             }
         }
 
         for (const startIndex of pagesToRequest) {
-            const payload = constructMessage(msgName, { index: startIndex });
+            const payload = constructMessage(actualMsgName, { index: startIndex });
             const response = await this.callEncrypted(payload, this.sessionKey);
 
             if (!response) {
@@ -884,14 +942,14 @@ export class AritechClient {
             if (response[0] === HEADER.RESPONSE && isMessageType(response, responseName, 1)) {
                 let foundAny = false;
 
-                for (let i = 0; i < NAMES_PER_PAGE; i++) {
-                    const offset = NAMES_START_OFFSET + i * NAME_LENGTH;
-                    if (offset + NAME_LENGTH > response.length) break;
+                for (let i = 0; i < namesPerPage; i++) {
+                    const offset = NAMES_START_OFFSET + i * nameLength;
+                    if (offset + nameLength > response.length) break;
 
                     const entityNum = startIndex + i;
                     if (maxCount && entityNum > maxCount) break;
 
-                    const nameBytes = response.slice(offset, offset + NAME_LENGTH);
+                    const nameBytes = response.slice(offset, offset + nameLength);
                     const name = nameBytes.toString('ascii').replace(/\0+$/, '').trim();
 
                     if (name) {
@@ -997,6 +1055,7 @@ export class AritechClient {
     /**
      * Get the list of valid/configured area numbers from the panel.
      * Uses cached value if available.
+     * x700 panels don't support getValidAreas - use all areas 1-N based on panel model.
      */
     async getValidAreaNumbers() {
         // Return cached value if available
@@ -1006,6 +1065,16 @@ export class AritechClient {
         }
 
         debug('\n=== Querying Valid Area Numbers ===');
+
+        // x700 panels don't support getValidAreas command - use all areas based on model
+        if (this.isX700Panel()) {
+            const maxAreas = this.getMaxAreaCount();
+            const validAreas = Array.from({ length: maxAreas }, (_, i) => i + 1);
+            debug(`x700 panel: using all ${maxAreas} areas: ${validAreas.join(', ')}`);
+            this.validAreaNumbers = validAreas;
+            return validAreas;
+        }
+
         const payload = constructMessage('getValidAreas', {});
         const response = await this.callEncrypted(payload, this.sessionKey);
 
@@ -1911,6 +1980,18 @@ export class AritechClient {
     async *readEventLog(maxEvents = 100) {
         debug('\n=== Reading Event Log ===');
 
+        // x700 panels use startMonitor + openLog, x500 panels use only openLog
+        const isX700 = this.isX700Panel();
+        const eventSize = isX700 ? 60 : 70;
+
+        if (isX700) {
+            // x700 requires startMonitor first
+            const startPayload = constructMessage('startMonitor', {});
+            const startResponse = await this.callEncrypted(startPayload, this.sessionKey);
+            if (startResponse) {
+                debug(`startMonitor response: ${startResponse.toString('hex')}`);
+            }
+        }
         const initPayload = constructMessage('openLog', {});
         const initResponse = await this.callEncrypted(initPayload, this.sessionKey);
         if (initResponse) {
@@ -1952,19 +2033,19 @@ export class AritechClient {
                     continue;
                 }
 
-                // Response payload is 70 bytes starting at offset 2 (after header + msgId)
+                // Response payload starts at offset 2 (after header + msgId)
                 const eventData = response.slice(2);
 
-                if (eventData.length < 70) {
-                    debug(`Event data too short: ${eventData.length} bytes`);
+                if (eventData.length < eventSize) {
+                    debug(`Event data too short: ${eventData.length} bytes (expected ${eventSize})`);
                     consecutiveErrors++;
                     if (consecutiveErrors >= maxConsecutiveErrors) break;
                     continue;
                 }
 
-                // Parse the 70-byte event
+                // Parse the event (60 bytes for x700, 70 bytes for x500)
                 try {
-                    const eventBuffer = eventData.slice(0, 70);
+                    const eventBuffer = eventData.slice(0, eventSize);
                     const parsedEvent = parseEvent(eventBuffer);
 
                     // Use parsed sequence for end detection
@@ -1984,7 +2065,7 @@ export class AritechClient {
                     yield parsedEvent;
                 } catch (parseError) {
                     debug(`Failed to parse event: ${parseError.message}`);
-                    debug(`Raw event data: ${eventData.slice(0, 70).toString('hex')}`);
+                    debug(`Raw event data: ${eventData.slice(0, eventSize).toString('hex')}`);
                     consecutiveErrors++;
                     if (consecutiveErrors >= maxConsecutiveErrors) break;
                 }

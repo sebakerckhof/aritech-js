@@ -26,9 +26,9 @@ import { EVENT_TYPES, CLASS_ID_STRINGS } from './event-types.js';
 // ============================================================================
 
 /**
- * Event field byte offsets within the 70-byte event buffer.
+ * Event field byte offsets for x500 panels (70-byte event buffer).
  */
-const EVENT_FIELDS = {
+const EVENT_FIELDS_X500 = {
     // Header and timestamp
     header: { byte: 0, length: 2 },
     timestamp: { byte: 2, length: 6 },  // BCD format: YYMMDDhhmmss
@@ -45,9 +45,37 @@ const EVENT_FIELDS = {
     // Detail fields (context-dependent based on event type)
     details: { byte: 21, length: 7 },
 
-    // Description text
+    // Description text (42 bytes for x500)
     description: { byte: 28, length: 42, type: 'string' }
 };
+
+/**
+ * Event field byte offsets for x700 panels (60-byte event buffer).
+ * Same structure as x500 but with shorter description field.
+ */
+const EVENT_FIELDS_X700 = {
+    // Header and timestamp
+    header: { byte: 0, length: 2 },
+    timestamp: { byte: 2, length: 6 },  // BCD format: YYMMDDhhmmss
+
+    // Event identification
+    sequence: { byte: 12, length: 1 },
+    logType: { byte: 13, length: 1 },
+    eventId: { byte: 14, length: 2, bigEndian: true },
+    eventSource: { byte: 16, length: 1 },
+    sourceSubId: { byte: 17, length: 1 },
+    entityId: { byte: 18, length: 2, bigEndian: true },
+    area: { byte: 20, length: 1 },
+
+    // Detail fields (context-dependent based on event type)
+    details: { byte: 21, length: 7 },
+
+    // Description text (32 bytes for x700)
+    description: { byte: 28, length: 32, type: 'string' }
+};
+
+// Alias for backwards compatibility
+const EVENT_FIELDS = EVENT_FIELDS_X500;
 
 // ============================================================================
 // PARSING FUNCTIONS
@@ -107,8 +135,12 @@ function parseBcdTimestamp(buffer, offset) {
 }
 
 /**
- * Parse a 70-byte event buffer into structured JSON
- * @param {Buffer} eventBuffer - 70-byte event data
+ * Parse an event buffer into structured JSON.
+ * Auto-detects format based on buffer length:
+ * - 60 bytes: x700 panel format (32-byte description)
+ * - 70 bytes: x500 panel format (42-byte description)
+ *
+ * @param {Buffer} eventBuffer - 60 or 70-byte event data
  * @returns {Object} Parsed event object
  */
 export function parseEvent(eventBuffer) {
@@ -116,22 +148,28 @@ export function parseEvent(eventBuffer) {
         throw new Error('Input must be a Buffer');
     }
 
-    if (eventBuffer.length !== 70) {
-        throw new Error(`Event buffer must be exactly 70 bytes, got ${eventBuffer.length}`);
+    // Auto-detect format based on buffer length
+    let fields;
+    if (eventBuffer.length === 60) {
+        fields = EVENT_FIELDS_X700;  // x700 panel format
+    } else if (eventBuffer.length === 70) {
+        fields = EVENT_FIELDS_X500;  // x500 panel format
+    } else {
+        throw new Error(`Event buffer must be 60 (x700) or 70 (x500) bytes, got ${eventBuffer.length}`);
     }
 
     // Parse timestamp from BCD bytes
-    const timestamp = parseBcdTimestamp(eventBuffer, EVENT_FIELDS.timestamp.byte);
+    const timestamp = parseBcdTimestamp(eventBuffer, fields.timestamp.byte);
 
     // Read event identification fields
-    const sequence = readField(eventBuffer, EVENT_FIELDS.sequence);
-    const logType = readField(eventBuffer, EVENT_FIELDS.logType);
-    const eventId = readField(eventBuffer, EVENT_FIELDS.eventId);
-    const eventSource = readField(eventBuffer, EVENT_FIELDS.eventSource);
-    const sourceSubId = readField(eventBuffer, EVENT_FIELDS.sourceSubId);
-    const entityId = readField(eventBuffer, EVENT_FIELDS.entityId);
-    const areaId = readField(eventBuffer, EVENT_FIELDS.area);
-    const description = readField(eventBuffer, EVENT_FIELDS.description);
+    const sequence = readField(eventBuffer, fields.sequence);
+    const logType = readField(eventBuffer, fields.logType);
+    const eventId = readField(eventBuffer, fields.eventId);
+    const eventSource = readField(eventBuffer, fields.eventSource);
+    const sourceSubId = readField(eventBuffer, fields.sourceSubId);
+    const entityId = readField(eventBuffer, fields.entityId);
+    const areaId = readField(eventBuffer, fields.area);
+    const description = readField(eventBuffer, fields.description);
 
     // Look up event type info
     const eventInfo = EVENT_TYPES[eventId] || {
@@ -163,7 +201,7 @@ export function parseEvent(eventBuffer) {
             description: description || null
         },
         // Include detail bytes for advanced parsing
-        details: eventBuffer.slice(EVENT_FIELDS.details.byte, EVENT_FIELDS.details.byte + EVENT_FIELDS.details.length)
+        details: eventBuffer.slice(fields.details.byte, fields.details.byte + fields.details.length)
     };
 }
 
