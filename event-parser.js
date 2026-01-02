@@ -26,9 +26,10 @@ import { EVENT_TYPES, CLASS_ID_STRINGS } from './event-types.js';
 // ============================================================================
 
 /**
- * Event field byte offsets for x500 panels (70-byte event buffer).
+ * Event field byte offsets for older x500 panels (70-byte event buffer).
+ * Used by x500 panels with protocol < 4.4.
  */
-const EVENT_FIELDS_X500 = {
+const EVENT_FIELDS_OLD = {
     // Header and timestamp
     header: { byte: 0, length: 2 },
     timestamp: { byte: 2, length: 6 },  // BCD format: YYMMDDhhmmss
@@ -50,10 +51,11 @@ const EVENT_FIELDS_X500 = {
 };
 
 /**
- * Event field byte offsets for x700 panels (60-byte event buffer).
- * Same structure as x500 but with shorter description field.
+ * Event field byte offsets for extended format (60-byte event buffer).
+ * Used by x700 panels and x500 panels with protocol 4.4+.
+ * Same structure as older format but with shorter description field.
  */
-const EVENT_FIELDS_X700 = {
+const EVENT_FIELDS_NEW = {
     // Header and timestamp
     header: { byte: 0, length: 2 },
     timestamp: { byte: 2, length: 6 },  // BCD format: YYMMDDhhmmss
@@ -75,7 +77,7 @@ const EVENT_FIELDS_X700 = {
 };
 
 // Alias for backwards compatibility
-const EVENT_FIELDS = EVENT_FIELDS_X500;
+const EVENT_FIELDS = EVENT_FIELDS_OLD;
 
 // ============================================================================
 // PARSING FUNCTIONS
@@ -137,8 +139,8 @@ function parseBcdTimestamp(buffer, offset) {
 /**
  * Parse an event buffer into structured JSON.
  * Auto-detects format based on buffer length:
- * - 60 bytes: x700 panel format (32-byte description)
- * - 70 bytes: x500 panel format (42-byte description)
+ * - 60 bytes: Extended format (x700 panels and x500 panels with protocol 4.4+)
+ * - 70 bytes: Legacy format (x500 panels with protocol < 4.4)
  *
  * @param {Buffer} eventBuffer - 60 or 70-byte event data
  * @returns {Object} Parsed event object
@@ -151,11 +153,11 @@ export function parseEvent(eventBuffer) {
     // Auto-detect format based on buffer length
     let fields;
     if (eventBuffer.length === 60) {
-        fields = EVENT_FIELDS_X700;  // x700 panel format
+        fields = EVENT_FIELDS_NEW;  // Extended format (x700, x500 4.4+)
     } else if (eventBuffer.length === 70) {
-        fields = EVENT_FIELDS_X500;  // x500 panel format
+        fields = EVENT_FIELDS_OLD;  // Legacy format (x500 < 4.4)
     } else {
-        throw new Error(`Event buffer must be 60 (x700) or 70 (x500) bytes, got ${eventBuffer.length}`);
+        throw new Error(`Event buffer must be 60 (extended) or 70 (legacy) bytes, got ${eventBuffer.length}`);
     }
 
     // Parse timestamp from BCD bytes

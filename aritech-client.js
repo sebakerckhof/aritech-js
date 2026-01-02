@@ -1980,9 +1980,11 @@ export class AritechClient {
     async *readEventLog(maxEvents = 100) {
         debug('\n=== Reading Event Log ===');
 
-        // x700 panels use startMonitor + openLog, x500 panels use only openLog
+        // x700 panels and x500 panels with protocol 4.4+ use 60-byte events
+        // Older x500 panels use 70-byte events
         const isX700 = this.isX700Panel();
-        const eventSize = isX700 ? 60 : 70;
+        const isExtendedProtocol = this.protocolVersion && this.protocolVersion >= 4004;
+        const eventSize = (isX700 || isExtendedProtocol) ? 60 : 70;
 
         if (isX700) {
             // x700 requires startMonitor first
