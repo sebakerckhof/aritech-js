@@ -27,6 +27,7 @@ import AreaState from './AreaState.js';
 import ZoneState from './ZoneState.js';
 import TriggerState from './TriggerState.js';
 import OutputState from './OutputState.js';
+import DoorState from './DoorState.js';
 
 // Create bound message helpers for this template set
 const {
@@ -158,6 +159,14 @@ export const ErrorCodes = {
     // Trigger control errors
     TRIGGER_ACTIVATE_FAILED: 'TRIGGER_ACTIVATE_FAILED',
     TRIGGER_DEACTIVATE_FAILED: 'TRIGGER_DEACTIVATE_FAILED',
+
+    // Door control errors
+    DOOR_LOCK_FAILED: 'DOOR_LOCK_FAILED',
+    DOOR_UNLOCK_FAILED: 'DOOR_UNLOCK_FAILED',
+    DOOR_UNLOCK_STANDARD_TIME_FAILED: 'DOOR_UNLOCK_STANDARD_TIME_FAILED',
+    DOOR_UNLOCK_TIME_FAILED: 'DOOR_UNLOCK_TIME_FAILED',
+    DOOR_DISABLE_FAILED: 'DOOR_DISABLE_FAILED',
+    DOOR_ENABLE_FAILED: 'DOOR_ENABLE_FAILED',
 
     // Control context errors
     CREATE_CC_FAILED: 'CREATE_CC_FAILED',
@@ -1598,6 +1607,13 @@ export class AritechClient {
     async activateTrigger(triggerNum) {
         debug(`\n=== Activating Trigger ${triggerNum} ===`);
 
+        // Check current state first
+        const states = await this.getTriggerStates([triggerNum]);
+        if (states.length > 0 && states[0].state.isActive) {
+            debug(`  Trigger ${triggerNum} is already active, skipping`);
+            return { skipped: true, reason: 'already active' };
+        }
+
         await this._withControlSession('createTriggerControlSession', {}, async (sessionId) => {
             debug(`  Calling activateTrigger...`);
             const payload = constructMessage('activateTrigger', { sessionId, objectId: triggerNum });
@@ -1611,6 +1627,7 @@ export class AritechClient {
             }
             debug(`  ✓ Trigger ${triggerNum} activated!`);
         }, 'trigger', triggerNum);
+        return { skipped: false };
     }
 
     /**
@@ -1620,6 +1637,13 @@ export class AritechClient {
      */
     async deactivateTrigger(triggerNum) {
         debug(`\n=== Deactivating Trigger ${triggerNum} ===`);
+
+        // Check current state first
+        const states = await this.getTriggerStates([triggerNum]);
+        if (states.length > 0 && !states[0].state.isActive) {
+            debug(`  Trigger ${triggerNum} is already inactive, skipping`);
+            return { skipped: true, reason: 'already inactive' };
+        }
 
         await this._withControlSession('createTriggerControlSession', {}, async (sessionId) => {
             debug(`  Calling deactivateTrigger...`);
@@ -1634,6 +1658,225 @@ export class AritechClient {
             }
             debug(`  ✓ Trigger ${triggerNum} deactivated!`);
         }, 'trigger', triggerNum);
+        return { skipped: false };
+    }
+
+    // ========================================================================
+    // DOOR METHODS
+    // ========================================================================
+
+    /**
+     * Get door names from the panel.
+     * @returns {Promise<Array>} Array of door objects with {number, name}
+     */
+    async getDoorNames() {
+        return this._getNames('getDoorNames', 'doorNames', {
+            entityName: 'Door'
+        });
+    }
+
+    /**
+     * Get the list of valid/configured door numbers from the panel.
+     * @returns {Promise<Array>} Array of valid door numbers
+     */
+    async getValidDoorNumbers() {
+        debug('\n=== Querying Valid Door Numbers ===');
+
+        const payload = constructMessage('getValidDoors', {});
+        const response = await this.callEncrypted(payload, this.sessionKey);
+
+        if (!response || response.length < 4) {
+            debug('No valid response for getValidDoors');
+            return [];
+        }
+
+        // Parse bitmask response - doors are typically in bytes starting at offset 2
+        const validDoors = [];
+        for (let byteIdx = 2; byteIdx < response.length; byteIdx++) {
+            const byte = response[byteIdx];
+            for (let bit = 0; bit < 8; bit++) {
+                if (byte & (1 << bit)) {
+                    const doorNum = (byteIdx - 2) * 8 + bit + 1;
+                    validDoors.push(doorNum);
+                }
+            }
+        }
+
+        debug(`Valid doors: ${validDoors.join(', ') || 'none'}`);
+        return validDoors;
+    }
+
+    /**
+     * Get door states using batch request.
+     * @param {Array|number} doorsOrMax - Array of door numbers/objects or max door count
+     * @returns {Promise<Array>} Array of door state objects
+     */
+    async getDoorStates(doorsOrMax = 8) {
+        debug('\n=== Querying Door States (Batch) ===');
+
+        const doorNumbers = Array.isArray(doorsOrMax)
+            ? (typeof doorsOrMax[0] === 'object' ? doorsOrMax.map(d => d.number) : doorsOrMax)
+            : Array.from({ length: doorsOrMax }, (_, i) => i + 1);
+
+        if (doorNumbers.length === 0) return [];
+
+        const batchPayload = buildBatchStatRequest('DOOR', doorNumbers);
+        const response = await this.callEncrypted(batchPayload, this.sessionKey);
+
+        if (!response || response.length < 4) return [];
+
+        const messages = splitBatchResponse(response, 'doorStatus');
+        if (messages.length === 0) {
+            debug(`No messages parsed from batch response`);
+            return [];
+        }
+
+        const doorStates = [];
+        for (const msg of messages) {
+            const state = DoorState.fromBytes(msg.bytes);
+            doorStates.push({
+                door: msg.objectId,
+                state,
+                rawHex: msg.bytes.toString('hex')
+            });
+        }
+
+        debug(`Batch received ${doorStates.length} door states`);
+        return doorStates;
+    }
+
+    /**
+     * Lock a door.
+     * @param {number} doorNum - Door number to lock
+     * @throws {AritechError} If locking fails
+     */
+    async lockDoor(doorNum) {
+        debug(`\n=== Locking Door ${doorNum} ===`);
+
+        await this._withControlSession('createDoorControlSession', {}, async (sessionId) => {
+            debug(`  Calling lockDoor...`);
+            const payload = constructMessage('lockDoor', { sessionId, objectId: doorNum });
+            const response = await this.callEncrypted(payload, this.sessionKey);
+
+            // Door commands return a0000100 for success (boolean 0x00 = no error)
+            // Error responses have 0xF0 header which checkResponseError will throw on
+            checkResponseError(response);
+            debug(`  ✓ Door ${doorNum} locked!`);
+        }, 'door', doorNum);
+    }
+
+    /**
+     * Unlock a door indefinitely.
+     * @param {number} doorNum - Door number to unlock
+     * @throws {AritechError} If unlocking fails
+     */
+    async unlockDoor(doorNum) {
+        debug(`\n=== Unlocking Door ${doorNum} ===`);
+
+        await this._withControlSession('createDoorControlSession', {}, async (sessionId) => {
+            debug(`  Calling unlockDoor...`);
+            const payload = constructMessage('unlockDoor', { sessionId, objectId: doorNum });
+            const response = await this.callEncrypted(payload, this.sessionKey);
+
+            // Door commands return a0000100 for success (boolean 0x00 = no error)
+            checkResponseError(response);
+            debug(`  ✓ Door ${doorNum} unlocked!`);
+        }, 'door', doorNum);
+    }
+
+    /**
+     * Unlock a door for the door's configured standard time.
+     * The door will automatically re-lock after the configured timeout.
+     * @param {number} doorNum - Door number to unlock
+     * @throws {AritechError} If unlocking fails
+     */
+    async unlockDoorStandardTime(doorNum) {
+        debug(`\n=== Unlocking Door ${doorNum} (Standard Time) ===`);
+
+        await this._withControlSession('createDoorControlSession', {}, async (sessionId) => {
+            debug(`  Calling unlockDoorStandardTime...`);
+            const payload = constructMessage('unlockDoorStandardTime', { sessionId, objectId: doorNum });
+            const response = await this.callEncrypted(payload, this.sessionKey);
+
+            // Door commands return a0000100 for success (boolean 0x00 = no error)
+            checkResponseError(response);
+            debug(`  ✓ Door ${doorNum} unlocked (standard time)!`);
+        }, 'door', doorNum);
+    }
+
+    /**
+     * Unlock a door for a specified time.
+     * The door will automatically re-lock after the specified timeout.
+     * @param {number} doorNum - Door number to unlock
+     * @param {number} seconds - Time in seconds to keep door unlocked
+     * @throws {AritechError} If unlocking fails
+     */
+    async unlockDoorTime(doorNum, seconds) {
+        debug(`\n=== Unlocking Door ${doorNum} for ${seconds}s ===`);
+
+        await this._withControlSession('createDoorControlSession', {}, async (sessionId) => {
+            debug(`  Calling unlockDoorTime...`);
+            const payload = constructMessage('unlockDoorTime', { sessionId, objectId: doorNum, timeOpen: seconds });
+            const response = await this.callEncrypted(payload, this.sessionKey);
+
+            // Door commands return a0000100 for success (boolean 0x00 = no error)
+            checkResponseError(response);
+            debug(`  ✓ Door ${doorNum} unlocked for ${seconds}s!`);
+        }, 'door', doorNum);
+    }
+
+    /**
+     * Disable a door.
+     * @param {number} doorNum - Door number to disable
+     * @throws {AritechError} If disabling fails
+     */
+    async disableDoor(doorNum) {
+        debug(`\n=== Disabling Door ${doorNum} ===`);
+
+        // Check current state first
+        const states = await this.getDoorStates([doorNum]);
+        if (states.length > 0 && states[0].state.isDisabled) {
+            debug(`  Door ${doorNum} is already disabled, skipping`);
+            return { skipped: true, reason: 'already disabled' };
+        }
+
+        await this._withControlSession('createDoorControlSession', {}, async (sessionId) => {
+            debug(`  Calling disableDoor...`);
+            const payload = constructMessage('disableDoor', { sessionId, objectId: doorNum });
+            const response = await this.callEncrypted(payload, this.sessionKey);
+
+            // Door commands return a0000100 for success (boolean 0x00 = no error)
+            checkResponseError(response);
+            debug(`  ✓ Door ${doorNum} disabled!`);
+        }, 'door', doorNum);
+        return { skipped: false };
+    }
+
+    /**
+     * Enable a door.
+     * @param {number} doorNum - Door number to enable
+     * @throws {AritechError} If enabling fails
+     */
+    async enableDoor(doorNum) {
+        debug(`\n=== Enabling Door ${doorNum} ===`);
+
+        // Check current state first
+        const states = await this.getDoorStates([doorNum]);
+        if (states.length > 0 && !states[0].state.isDisabled) {
+            debug(`  Door ${doorNum} is already enabled, skipping`);
+            return { skipped: true, reason: 'already enabled' };
+        }
+
+        await this._withControlSession('createDoorControlSession', {}, async (sessionId) => {
+            debug(`  Calling enableDoor...`);
+            const payload = constructMessage('enableDoor', { sessionId, objectId: doorNum });
+            const response = await this.callEncrypted(payload, this.sessionKey);
+
+            // Door commands return a0000100 for success (boolean 0x00 = no error)
+            checkResponseError(response);
+            debug(`  ✓ Door ${doorNum} enabled!`);
+        }, 'door', doorNum);
+        return { skipped: false };
     }
 
     /**

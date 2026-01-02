@@ -17,6 +17,7 @@ const COS_CHANGE_TYPES = {
     ZONE: 0x01,
     AREA: 0x02,
     OUTPUT: 0x07,
+    DOOR: 0x0b,
     TRIGGER: 0x14,
     ALL: 0xFF
 };
@@ -48,7 +49,8 @@ const debug = (...args) => {
  * - 'areaChanged': { id, name, oldData, newData }
  * - 'outputChanged': { id, name, oldData, newData }
  * - 'triggerChanged': { id, name, oldData, newData }
- * - 'initialized': { zones, areas, outputs, triggers }
+ * - 'doorChanged': { id, name, oldData, newData }
+ * - 'initialized': { zones, areas, outputs, triggers, doors }
  * - 'error': Error object
  *
  * @example
@@ -68,10 +70,12 @@ export class AritechMonitor extends EventEmitter {
         this.areas = [];           // Array of {number, name}
         this.outputs = [];         // Array of {number, name}
         this.triggers = [];        // Array of {number, name}
+        this.doors = [];           // Array of {number, name}
         this.zoneStates = {};      // Map of zoneNum -> state data
         this.areaStates = {};      // Map of areaNum -> state data
         this.outputStates = {};    // Map of outputNum -> state data
         this.triggerStates = {};   // Map of triggerNum -> state data
+        this.doorStates = {};      // Map of doorNum -> state data
 
         // Internal state
         this.running = false;
@@ -157,6 +161,14 @@ export class AritechMonitor extends EventEmitter {
     }
 
     /**
+     * Get current state of all doors.
+     * @returns {Object} Map of door number to state data
+     */
+    getDoorStates() {
+        return { ...this.doorStates };
+    }
+
+    /**
      * Initialize by fetching all zone/area names and their current states.
      * @private
      */
@@ -228,16 +240,35 @@ export class AritechMonitor extends EventEmitter {
         }
         debug(`  Captured state for ${Object.keys(this.triggerStates).length} triggers`);
 
+        // Fetch door names
+        debug('Fetching door names...');
+        this.doors = await this.client.getDoorNames();
+        debug(`  Found ${this.doors.length} doors`);
+
+        // Fetch initial door states
+        if (this.doors.length > 0) {
+            debug('Fetching initial door states...');
+            const doorStates = await this.client.getDoorStates(this.doors.map(d => d.number));
+            for (const doorState of doorStates) {
+                this.doorStates[doorState.door] = {
+                    ...doorState,
+                };
+            }
+            debug(`  Captured state for ${Object.keys(this.doorStates).length} doors`);
+        }
+
         // Emit initialized event
         this.emit('initialized', {
             zones: this.zones,
             areas: this.areas,
             outputs: this.outputs,
             triggers: this.triggers,
+            doors: this.doors,
             zoneStates: this.getZoneStates(),
             areaStates: this.getAreaStates(),
             outputStates: this.getOutputStates(),
-            triggerStates: this.getTriggerStates()
+            triggerStates: this.getTriggerStates(),
+            doorStates: this.getDoorStates()
         });
 
         debug('✓ Initialization complete\n');
@@ -300,6 +331,8 @@ export class AritechMonitor extends EventEmitter {
                 changeType = 'output';
             } else if (typeByte === COS_CHANGE_TYPES.TRIGGER) {
                 changeType = 'trigger';
+            } else if (typeByte === COS_CHANGE_TYPES.DOOR) {
+                changeType = 'door';
             }
             debug(`  Change type: ${changeType}`);
         }
@@ -320,6 +353,7 @@ export class AritechMonitor extends EventEmitter {
         let changedAreas = [];
         let changedOutputs = [];
         let changedTriggers = [];
+        let changedDoors = [];
 
         if (changeType === 'zone' || changeType === 'all') {
             const zoneResponse = await this.client.callEncrypted(constructMessage('getZoneChanges'), this.client.sessionKey);
@@ -385,6 +419,22 @@ export class AritechMonitor extends EventEmitter {
             }
         }
 
+        if (changeType === 'door' || changeType === 'all') {
+            const doorResponse = await this.client.callEncrypted(constructMessage('getDoorChanges'), this.client.sessionKey);
+
+            if (doorResponse && doorResponse.length >= 3 &&
+                doorResponse[0] === HEADER_RESPONSE && doorResponse[1] === 0x30) {
+                const bitmapType = doorResponse[2];
+                const bitmap = doorResponse.slice(3);
+                debug(`  Door bitmap response type: 0x${bitmapType.toString(16)}, data: ${bitmap.toString('hex')}`);
+
+                if (bitmapType === COS_CHANGE_TYPES.DOOR) {
+                    changedDoors = this._parseBitmap(bitmap, this.doors.map(d => d.number));
+                    debug(`  Changed doors: ${changedDoors.join(', ') || 'none'}`);
+                }
+            }
+        }
+
         // Update based on what actually changed
         if (changedZones.length > 0) {
             await this._updateZoneStates(changedZones);
@@ -419,6 +469,15 @@ export class AritechMonitor extends EventEmitter {
             debug(`  No specific triggers in bitmap, fetching all`);
             const allTriggerNumbers = this.triggers.map(t => t.number);
             await this._updateTriggerStates(allTriggerNumbers);
+        }
+
+        if (changedDoors.length > 0) {
+            await this._updateDoorStates(changedDoors);
+        } else if (changeType === 'door' || changeType === 'all') {
+            // Fallback: fetch all doors if no specific bitmap
+            debug(`  No specific doors in bitmap, fetching all`);
+            const allDoorNumbers = this.doors.map(d => d.number);
+            await this._updateDoorStates(allDoorNumbers);
         }
     }
 
@@ -606,6 +665,44 @@ export class AritechMonitor extends EventEmitter {
 
             // Update stored state
             this.triggerStates[triggerNum] = { ...newState };
+        }
+    }
+
+    /**
+     * Update door states and emit events for changes.
+     * @private
+     * @param {number[]} doorNumbers - Door numbers to update
+     */
+    async _updateDoorStates(doorNumbers) {
+        if (doorNumbers.length === 0) return;
+
+        const newStates = await this.client.getDoorStates(doorNumbers);
+
+        for (const newState of newStates) {
+            const doorNum = newState.door;
+            const oldState = this.doorStates[doorNum];
+
+            // Check if changed by comparing raw bytes
+            const hasChanged = !oldState || oldState.rawHex !== newState.rawHex;
+
+            if (hasChanged) {
+                // Find door name
+                const door = this.doors.find(d => d.number === doorNum);
+                const doorName = door?.name || `Door ${doorNum}`;
+
+                // Emit event
+                this.emit('doorChanged', {
+                    id: doorNum,
+                    name: doorName,
+                    oldData: oldState ? { ...oldState } : null,
+                    newData: { ...newState }
+                });
+
+                debug(`  🔔 Door ${doorNum} (${doorName}): ${oldState?.rawHex || 'NEW'} → ${newState.rawHex}`);
+            }
+
+            // Update stored state
+            this.doorStates[doorNum] = { ...newState };
         }
     }
 

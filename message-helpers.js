@@ -351,6 +351,7 @@ const BATCH_PAYLOAD_LENGTHS = {
     'zoneStatus': 7,
     'triggerStatus': 5,
     'outputStatus': 5,
+    'doorStatus': 6,
 };
 
 /**
@@ -457,6 +458,7 @@ const GET_STAT_MSG_NAMES = {
     AREA: 'getAreaStatus',
     OUTPUT: 'getOutputStatus',
     TRIGGER: 'getTriggerStatus',
+    DOOR: 'getDoorStatus',
 };
 
 /**
@@ -464,7 +466,7 @@ const GET_STAT_MSG_NAMES = {
  * Returns message without header (for embedding in batch).
  *
  * @param {Object} templates - The messageTemplates object
- * @param {string} entityType - Entity type: 'ZONE', 'AREA', 'OUTPUT', or 'TRIGGER'
+ * @param {string} entityType - Entity type: 'ZONE', 'AREA', 'OUTPUT', 'TRIGGER', or 'DOOR'
  * @param {number} entityId - The entity ID (zone number, area number, etc.)
  * @param {boolean} [withSeparator=false] - Whether to append separator byte
  * @returns {Buffer} Message bytes without header
@@ -487,7 +489,7 @@ export function buildGetStatRequest(templates, entityType, entityId, withSeparat
  * Build batch request for multiple getSTAT queries.
  *
  * @param {Object} templates - The messageTemplates object
- * @param {string} entityType - Entity type: 'ZONE', 'AREA', 'OUTPUT', or 'TRIGGER'
+ * @param {string} entityType - Entity type: 'ZONE', 'AREA', 'OUTPUT', 'TRIGGER', or 'DOOR'
  * @param {number[]} entityIds - Array of entity IDs to query
  * @returns {Buffer} Complete batch request message
  */

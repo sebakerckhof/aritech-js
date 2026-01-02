@@ -65,23 +65,30 @@ Note: Debug logs may contain sensitive information such as your PIN code.
 
 ```
 Available commands:
-  node aritech-cli.js info                 - Show panel description info
-  node aritech-cli.js monitor              - Start monitoring mode (COS events)
-  node aritech-cli.js arm [area] [type] [--force]  - Arm area (default: area 1, type full)
-                                             Types: full, part1, part2
-                                             --force: Force arm despite faults/active zones
-  node aritech-cli.js disarm [area]        - Disarm area (default: 1)
-  node aritech-cli.js zones                - Show zone states
-  node aritech-cli.js areas                - Show area states
-  node aritech-cli.js outputs              - Show output names and states
-  node aritech-cli.js triggers             - Show trigger names and states
-  node aritech-cli.js inhibit <zone>       - Inhibit a zone
-  node aritech-cli.js uninhibit <zone>     - Uninhibit a zone
-  node aritech-cli.js activate <output>    - Activate an output
-  node aritech-cli.js deactivate <output>  - Deactivate an output
-  node aritech-cli.js trigger-activate <trigger>   - Activate a trigger
-  node aritech-cli.js trigger-deactivate <trigger> - Deactivate a trigger
-  node aritech-cli.js eventLog [count]     - Read event log (default: 50 events)
+  aritech info                 - Show panel description info
+  aritech monitor              - Start monitoring mode (COS events)
+  aritech arm [area] [type] [--force]  - Arm area (default: area 1, type full)
+                                 Types: full, part1, part2
+                                 --force: Force arm despite faults/active zones
+  aritech disarm [area]        - Disarm area (default: 1)
+  aritech zones                - Show zone states
+  aritech areas                - Show area states
+  aritech outputs              - Show output names and states
+  aritech triggers             - Show trigger names and states
+  aritech doors                - Show door names and states
+  aritech inhibit <zone>       - Inhibit a zone
+  aritech uninhibit <zone>     - Uninhibit a zone
+  aritech activate <output>    - Activate an output
+  aritech deactivate <output>  - Deactivate an output
+  aritech trigger-activate <trigger>   - Activate a trigger
+  aritech trigger-deactivate <trigger> - Deactivate a trigger
+  aritech door-lock <door>     - Lock a door
+  aritech door-unlock <door>   - Unlock a door (indefinitely)
+  aritech door-unlock-standard <door> - Unlock door for standard configured time
+  aritech door-unlock-timed <door> <seconds> - Unlock door for specified seconds
+  aritech door-disable <door>  - Disable a door
+  aritech door-enable <door>   - Enable a door
+  aritech eventLog [count]     - Read event log (default: 50 events)
 
 Configuration options (override config.json):
   --host <ip>              - Panel IP address
@@ -96,17 +103,18 @@ Configuration options (override config.json):
   --password <pwd>         - Login password (defaults to username)
 
 Examples:
-  node aritech-cli.js --host 192.168.1.100 --pin 1234 --encryptionKey <key> zones
-  node aritech-cli.js --host 192.168.1.100 --username ADMIN --password SECRET --encryptionKey <key> zones
-  node aritech-cli.js arm 1 full           - Full arm area 1
-  node aritech-cli.js arm 1 part1          - Part arm 1 (set 1)
-  node aritech-cli.js arm 2 part2          - Part arm 2 (set 2)
-  node aritech-cli.js arm part1            - Part arm area 1 (default)
-  node aritech-cli.js arm 1 full --force   - Force full arm area 1
-  node aritech-cli.js outputs              - Show all outputs with states
-  node aritech-cli.js activate 1           - Activate output 1
-  node aritech-cli.js triggers             - Show all triggers with states
-  node aritech-cli.js trigger-activate 1   - Activate trigger 1
+  aritech --host 192.168.1.100 --pin 1234 --encryptionKey <key> zones
+  aritech --host 192.168.1.100 --username ADMIN --password SECRET --encryptionKey <key> zones
+  aritech arm 1 full           - Full arm area 1
+  aritech arm 1 part1          - Part arm 1 (set 1)
+  aritech arm 2 part2          - Part arm 2 (set 2)
+  aritech arm part1            - Part arm area 1 (default)
+  aritech arm 1 full --force   - Force full arm area 1
+  aritech outputs              - Show all outputs with states
+  aritech activate 1           - Activate output 1
+  aritech triggers             - Show all triggers with states
+  aritech trigger-activate 1   - Activate trigger 1
+
 ```
 
 ## Features
@@ -141,6 +149,14 @@ Examples:
 - ✅ Read trigger states
 - ✅ Monitor change events for triggers
 - ✅ Activate / Deactivate triggers
+
+### Doors
+- ✅ Read door names
+- ✅ Read door states
+- ✅ Monitor change events for triggers
+- ✅ Enable / Disable doors
+- ✅ Lock / Unlock doors
+- ✅ Timed and standard time unlock
 
 ## Contributing
 

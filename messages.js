@@ -104,6 +104,18 @@ export const messageTemplates = {
             'areas-33-64': [{ byte: 8, mask: 0xFF }]
         }
     },
+    'createDoorControlSession': {
+        msgId: 1382,
+        msgIdBytes: [0xcc, 0x15],
+        templateBytes: [0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        payloadLength: 12,
+        properties: {
+            ...generateBitmaskProps('area', 4, 1, 64),
+            'typeId': [{ byte: 3, mask: 0xFF }],
+            'areas-1-32': [{ byte: 4, mask: 0xFF }],
+            'areas-33-64': [{ byte: 8, mask: 0xFF }]
+        }
+    },
     'createZoneControlSession': {
         msgId: 550,
         msgIdBytes: [0xcc, 0x08],
@@ -345,6 +357,82 @@ export const messageTemplates = {
             'objectId': [{ byte: 7, mask: 0xFF }]
         }
     },
+    // Door control commands
+    // Format from capture: c0cfe621 02 SSSS OOOO 00000000
+    // byte 3: typeId, bytes 4-5: sessionId, bytes 6-7: objectId, bytes 8-11: padding
+    'lockDoor': {
+        msgId: -276840,
+        msgIdBytes: [0xcf, 0xe5, 0x21],
+        templateBytes: [0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        payloadLength: 12,
+        properties: {
+            'typeId': [{ byte: 3, mask: 0xFF }],
+            'sessionId': [{ byte: 4, mask: 0xFF }, { byte: 5, mask: 0xFF }],
+            // objectId is big-endian: high byte first, then low byte
+            'objectId': [{ byte: 7, mask: 0xFF }, { byte: 6, mask: 0xFF }]
+        }
+    },
+    'unlockDoor': {
+        msgId: -276904,
+        msgIdBytes: [0xcf, 0xe6, 0x21],
+        templateBytes: [0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        payloadLength: 12,
+        properties: {
+            'typeId': [{ byte: 3, mask: 0xFF }],
+            'sessionId': [{ byte: 4, mask: 0xFF }, { byte: 5, mask: 0xFF }],
+            // objectId is big-endian: high byte first, then low byte
+            'objectId': [{ byte: 7, mask: 0xFF }, { byte: 6, mask: 0xFF }]
+        }
+    },
+    'unlockDoorStandardTime': {
+        msgId: -276712,
+        msgIdBytes: [0xcf, 0xe3, 0x21],
+        templateBytes: [0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        payloadLength: 12,
+        properties: {
+            'typeId': [{ byte: 3, mask: 0xFF }],
+            'sessionId': [{ byte: 4, mask: 0xFF }, { byte: 5, mask: 0xFF }],
+            // objectId is big-endian: high byte first, then low byte
+            'objectId': [{ byte: 7, mask: 0xFF }, { byte: 6, mask: 0xFF }]
+        }
+    },
+    'unlockDoorTime': {
+        msgId: -276776,
+        msgIdBytes: [0xcf, 0xe4, 0x21],
+        templateBytes: [0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        payloadLength: 13,
+        properties: {
+            'typeId': [{ byte: 3, mask: 0xFF }],
+            'sessionId': [{ byte: 4, mask: 0xFF }, { byte: 5, mask: 0xFF }],
+            // objectId is big-endian: high byte first, then low byte
+            'objectId': [{ byte: 7, mask: 0xFF }, { byte: 6, mask: 0xFF }],
+            'timeOpen': [{ byte: 8, mask: 0xFF }]
+        }
+    },
+    'disableDoor': {
+        msgId: -276968,
+        msgIdBytes: [0xcf, 0xe7, 0x21],
+        templateBytes: [0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        payloadLength: 12,
+        properties: {
+            'typeId': [{ byte: 3, mask: 0xFF }],
+            'sessionId': [{ byte: 4, mask: 0xFF }, { byte: 5, mask: 0xFF }],
+            // objectId is big-endian: high byte first, then low byte
+            'objectId': [{ byte: 7, mask: 0xFF }, { byte: 6, mask: 0xFF }]
+        }
+    },
+    'enableDoor': {
+        msgId: -277032,
+        msgIdBytes: [0xcf, 0xe8, 0x21],
+        templateBytes: [0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        payloadLength: 12,
+        properties: {
+            'typeId': [{ byte: 3, mask: 0xFF }],
+            'sessionId': [{ byte: 4, mask: 0xFF }, { byte: 5, mask: 0xFF }],
+            // objectId is big-endian: high byte first, then low byte
+            'objectId': [{ byte: 7, mask: 0xFF }, { byte: 6, mask: 0xFF }]
+        }
+    },
     'inhibitZone': {
         msgId: -270568,
         msgIdBytes: [0xcf, 0x83, 0x21],
@@ -416,6 +504,15 @@ export const messageTemplates = {
             'typeId': [{ byte: 3, mask: 0xFF }]
         }
     },
+    'getDoorChanges': {
+        msgId: 741,
+        msgIdBytes: [0xca, 0x0b],
+        templateBytes: [0x00, 0x00],
+        payloadLength: 4,
+        properties: {
+            'typeId': [{ byte: 3, mask: 0xFF }]
+        }
+    },
     'getZoneChanges': {
         msgId: 101,
         msgIdBytes: [0xca, 0x01],
@@ -455,6 +552,16 @@ export const messageTemplates = {
             'objectId': [{ byte: 5, mask: 0xFF }]
         }
     },
+    'getDoorStatus': {
+        msgId: -742,
+        msgIdBytes: [0xcb, 0x0b],
+        templateBytes: [0x00, 0x03, 0x00, 0x00],
+        payloadLength: 6,
+        properties: {
+            'typeId': [{ byte: 3, mask: 0xFF }],
+            'objectId': [{ byte: 5, mask: 0xFF }]
+        }
+    },
     'getZoneStatus': {
         msgId: -102,
         msgIdBytes: [0xcb, 0x01],
@@ -469,6 +576,15 @@ export const messageTemplates = {
         msgId: 13,
         msgIdBytes: [0x1a],
         templateBytes: [0x02, 0x00, 0x00],
+        payloadLength: 4,
+        properties: {
+            'typeId': [{ byte: 3, mask: 0xFF }]
+        }
+    },
+    'getValidDoors': {
+        msgId: 13,
+        msgIdBytes: [0x1a],
+        templateBytes: [0x0b, 0x00, 0x00],
         payloadLength: 4,
         properties: {
             'typeId': [{ byte: 3, mask: 0xFF }]
@@ -516,6 +632,16 @@ export const messageTemplates = {
         msgId: -13,
         msgIdBytes: [0x19],
         templateBytes: [0x14, 0x00, 0x00, 0x10],
+        payloadLength: 5,
+        properties: {
+            'name': [{ byte: -1, mask: 0xFF, length: 16, type: 'string' }],
+            'index': [{ byte: 3, mask: 0xFF }]
+        }
+    },
+    'doorNames': {
+        msgId: -13,
+        msgIdBytes: [0x19],
+        templateBytes: [0x0b, 0x00, 0x00, 0x10],
         payloadLength: 5,
         properties: {
             'name': [{ byte: -1, mask: 0xFF, length: 16, type: 'string' }],
@@ -783,6 +909,32 @@ export const messageTemplates = {
             'isFunctionKey': [{ byte: 4, mask: 0x10 }]
         }
     },
+    'doorStatus': {
+        msgId: -25,
+        msgIdBytes: [0x31],
+        templateBytes: [0x0b, 0x00, 0x00, 0x00, 0x00],
+        payloadLength: 6,
+        properties: {
+            'objectId': [{ byte: 3, mask: 0xFF }],
+            // Byte 4 flags
+            'isDisabled': [{ byte: 4, mask: 0x01 }],
+            'isUnlocked': [{ byte: 4, mask: 0x02 }],
+            'isUnlockedPeriod': [{ byte: 4, mask: 0x4 }],
+            'isTimeUnlocked': [{ byte: 4, mask: 0x8 }],
+            'isStandardTimeUnlocked': [{ byte: 4, mask: 0x10 }],
+            'isOpened': [{ byte: 4, mask: 0x20 }],
+            'isForced': [{ byte: 4, mask: 0x40 }],
+            'isDoorOpenTooLong': [{ byte: 4, mask: 0x80 }],
+            // Byte 5 flags
+            'isShunting': [{ byte: 5, mask: 0x01 }],
+            'isShuntWarning': [{ byte: 5, mask: 0x02 }],
+            'isReaderFault': [{ byte: 5, mask: 0x04 }],
+            'isReaderTamper': [{ byte: 5, mask: 0x08 }],
+            'isUnsecured': [{ byte: 5, mask: 0x10 }],
+            'isInputActive': [{ byte: 5, mask: 0x20 }],
+            'isOutputActive': [{ byte: 5, mask: 0x40 }]
+        }
+    },
     'zoneStatus': {
         msgId: -25,
         msgIdBytes: [0x31],
@@ -839,6 +991,16 @@ export const messageTemplates = {
         msgId: 12,
         msgIdBytes: [0x18],
         templateBytes: [0x14, 0x00, 0x03, 0x00, 0x00],
+        payloadLength: 6,
+        properties: {
+            'typeId': [{ byte: 3, mask: 0xFF }],
+            'index': [{ byte: 5, mask: 0xFF }]
+        }
+    },
+    'getDoorNames': {
+        msgId: 12,
+        msgIdBytes: [0x18],
+        templateBytes: [0x0b, 0x00, 0x03, 0x00, 0x00],
         payloadLength: 6,
         properties: {
             'typeId': [{ byte: 3, mask: 0xFF }],

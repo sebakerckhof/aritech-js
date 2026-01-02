@@ -5,3 +5,4 @@ export { default as AreaState } from './AreaState.js';
 export { default as ZoneState } from './ZoneState.js';
 export { default as OutputState } from './OutputState.js';
 export { default as TriggerState } from './TriggerState.js';
+export { default as DoorState } from './DoorState.js';

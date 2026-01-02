@@ -107,12 +107,19 @@ if (!command) {
   console.log('  aritech areas                - Show area states');
   console.log('  aritech outputs              - Show output names and states');
   console.log('  aritech triggers             - Show trigger names and states');
+  console.log('  aritech doors                - Show door names and states');
   console.log('  aritech inhibit <zone>       - Inhibit a zone');
   console.log('  aritech uninhibit <zone>     - Uninhibit a zone');
   console.log('  aritech activate <output>    - Activate an output');
   console.log('  aritech deactivate <output>  - Deactivate an output');
   console.log('  aritech trigger-activate <trigger>   - Activate a trigger');
   console.log('  aritech trigger-deactivate <trigger> - Deactivate a trigger');
+  console.log('  aritech door-lock <door>     - Lock a door');
+  console.log('  aritech door-unlock <door>   - Unlock a door (indefinitely)');
+  console.log('  aritech door-unlock-standard <door> - Unlock door for standard configured time');
+  console.log('  aritech door-unlock-timed <door> <seconds> - Unlock door for specified seconds');
+  console.log('  aritech door-disable <door>  - Disable a door');
+  console.log('  aritech door-enable <door>   - Enable a door');
   console.log('  aritech eventLog [count]     - Read event log (default: 50 events)');
   console.log('\nConfiguration options (override config.json):');
   console.log('  --host <ip>              - Panel IP address');
@@ -176,7 +183,8 @@ try {
         console.log(`  Zones: ${data.zones.length} tracked`);
         console.log(`  Areas: ${data.areas.length} tracked`);
         console.log(`  Outputs: ${data.outputs.length} tracked`);
-        console.log(`  Triggers: ${data.triggers.length} tracked\n`);
+        console.log(`  Triggers: ${data.triggers.length} tracked`);
+        console.log(`  Doors: ${data.doors.length} tracked\n`);
       });
 
       monitor.on('zoneChanged', (event) => {
@@ -256,6 +264,19 @@ try {
           const oldState = oldData?.state || 'unknown';
           const newState = newData?.state || 'unknown';
           console.log(`⚡ Trigger ${id} (${name}): ${oldState} → ${newState}`);
+        }
+      });
+
+      monitor.on('doorChanged', (event) => {
+        const { id, name, oldData, newData } = event;
+
+        if (process.env.LOG_LEVEL === 'debug') {
+          console.log(`🚪 Door ${id} (${name}) changed:`);
+          console.log(`   State: ${JSON.stringify(oldData, null, 2)} → ${JSON.stringify(newData, null, 2)}`);
+        } else {
+          const oldState = oldData?.state || 'unknown';
+          const newState = newData?.state || 'unknown';
+          console.log(`🚪 Door ${id} (${name}): ${oldState} → ${newState}`);
         }
       });
 
@@ -651,8 +672,12 @@ try {
       } else {
         console.log(`\nActivating trigger ${triggerNum}...`);
         try {
-          await client.activateTrigger(triggerNum);
-          console.log(`✓ Trigger ${triggerNum} activated successfully!`);
+          const result = await client.activateTrigger(triggerNum);
+          if (result?.skipped) {
+            console.log(`- Trigger ${triggerNum} is ${result.reason}, no action needed`);
+          } else {
+            console.log(`✓ Trigger ${triggerNum} activated successfully!`);
+          }
         } catch (err) {
           if (err instanceof AritechError) {
             console.log(`✗ Failed to activate trigger ${triggerNum}: ${err.message}`);
@@ -669,11 +694,175 @@ try {
       } else {
         console.log(`\nDeactivating trigger ${triggerNum}...`);
         try {
-          await client.deactivateTrigger(triggerNum);
-          console.log(`✓ Trigger ${triggerNum} deactivated successfully!`);
+          const result = await client.deactivateTrigger(triggerNum);
+          if (result?.skipped) {
+            console.log(`- Trigger ${triggerNum} is ${result.reason}, no action needed`);
+          } else {
+            console.log(`✓ Trigger ${triggerNum} deactivated successfully!`);
+          }
         } catch (err) {
           if (err instanceof AritechError) {
             console.log(`✗ Failed to deactivate trigger ${triggerNum}: ${err.message}`);
+          } else {
+            throw err;
+          }
+        }
+      }
+    } else if (command === 'doors') {
+      // Query both names and states, then merge them
+      console.log('\nQuerying door names...');
+      const doors = await client.getDoorNames();
+      console.log(`Found ${doors.length} doors\n`);
+
+      if (doors.length > 0) {
+        console.log('Querying door states...');
+        const states = await client.getDoorStates(doors.map(d => d.number));
+
+        // Merge names with states
+        const merged = doors.map(door => {
+          const stateInfo = states.find(s => s.door === door.number);
+          return {
+            number: door.number,
+            name: door.name,
+            state: stateInfo ? stateInfo.state : null,
+            rawHex: stateInfo ? stateInfo.rawHex : null
+          };
+        });
+
+        console.log('\nDoors:');
+        merged.forEach(door => {
+          const s = door.state;
+          // Icon based on lock state and physical open state
+          let icon = '⚫';
+          if (s?.isDisabled) icon = '🔴';
+          else if (s?.isForced || s?.isDoorOpenTooLong) icon = '🚨';
+          else if (s?.isOpened) icon = '🚪';
+          else if (!s?.isLocked) icon = '🔓';
+          else icon = '🔒';
+
+          console.log(`  ${icon} Door ${door.number}: ${door.name}`);
+          console.log(`     State: ${door.state?.toString() || 'unknown'}`);
+        });
+
+        if (process.env.LOG_LEVEL === 'debug') {
+          console.log('\nDetailed door data:');
+          console.log(JSON.stringify(merged, null, 2));
+        }
+      } else {
+        console.log('No doors found on this panel.');
+      }
+    } else if (command === 'door-lock') {
+      const doorNum = parseInt(args[1]);
+      if (!doorNum || doorNum < 1) {
+        console.log('Usage: aritech door-lock <door_number>');
+        console.log('Example: aritech door-lock 1');
+      } else {
+        console.log(`\nLocking door ${doorNum}...`);
+        try {
+          await client.lockDoor(doorNum);
+          console.log(`✓ Door ${doorNum} locked successfully!`);
+        } catch (err) {
+          if (err instanceof AritechError) {
+            console.log(`✗ Failed to lock door ${doorNum}: ${err.message}`);
+          } else {
+            throw err;
+          }
+        }
+      }
+    } else if (command === 'door-unlock') {
+      const doorNum = parseInt(args[1]);
+      if (!doorNum || doorNum < 1) {
+        console.log('Usage: aritech door-unlock <door_number>');
+        console.log('Example: aritech door-unlock 1');
+      } else {
+        console.log(`\nUnlocking door ${doorNum} (indefinitely)...`);
+        try {
+          await client.unlockDoor(doorNum);
+          console.log(`✓ Door ${doorNum} unlocked successfully!`);
+        } catch (err) {
+          if (err instanceof AritechError) {
+            console.log(`✗ Failed to unlock door ${doorNum}: ${err.message}`);
+          } else {
+            throw err;
+          }
+        }
+      }
+    } else if (command === 'door-unlock-standard') {
+      const doorNum = parseInt(args[1]);
+      if (!doorNum || doorNum < 1) {
+        console.log('Usage: aritech door-unlock-standard <door_number>');
+        console.log('Example: aritech door-unlock-standard 1');
+      } else {
+        console.log(`\nUnlocking door ${doorNum} (standard time)...`);
+        try {
+          await client.unlockDoorStandardTime(doorNum);
+          console.log(`✓ Door ${doorNum} unlocked (standard time)!`);
+        } catch (err) {
+          if (err instanceof AritechError) {
+            console.log(`✗ Failed to unlock door ${doorNum}: ${err.message}`);
+          } else {
+            throw err;
+          }
+        }
+      }
+    } else if (command === 'door-unlock-timed') {
+      const doorNum = parseInt(args[1]);
+      const seconds = parseInt(args[2]);
+      if (!doorNum || doorNum < 1 || !seconds || seconds < 1) {
+        console.log('Usage: aritech door-unlock-timed <door_number> <seconds>');
+        console.log('Example: aritech door-unlock-timed 1 10   (unlocks for 10 seconds)');
+      } else {
+        console.log(`\nUnlocking door ${doorNum} for ${seconds} seconds...`);
+        try {
+          await client.unlockDoorTime(doorNum, seconds);
+          console.log(`✓ Door ${doorNum} unlocked for ${seconds} seconds!`);
+        } catch (err) {
+          if (err instanceof AritechError) {
+            console.log(`✗ Failed to unlock door ${doorNum}: ${err.message}`);
+          } else {
+            throw err;
+          }
+        }
+      }
+    } else if (command === 'door-disable') {
+      const doorNum = parseInt(args[1]);
+      if (!doorNum || doorNum < 1) {
+        console.log('Usage: aritech door-disable <door_number>');
+        console.log('Example: aritech door-disable 1');
+      } else {
+        console.log(`\nDisabling door ${doorNum}...`);
+        try {
+          const result = await client.disableDoor(doorNum);
+          if (result?.skipped) {
+            console.log(`- Door ${doorNum} is ${result.reason}, no action needed`);
+          } else {
+            console.log(`✓ Door ${doorNum} disabled successfully!`);
+          }
+        } catch (err) {
+          if (err instanceof AritechError) {
+            console.log(`✗ Failed to disable door ${doorNum}: ${err.message}`);
+          } else {
+            throw err;
+          }
+        }
+      }
+    } else if (command === 'door-enable') {
+      const doorNum = parseInt(args[1]);
+      if (!doorNum || doorNum < 1) {
+        console.log('Usage: aritech door-enable <door_number>');
+        console.log('Example: aritech door-enable 1');
+      } else {
+        console.log(`\nEnabling door ${doorNum}...`);
+        try {
+          const result = await client.enableDoor(doorNum);
+          if (result?.skipped) {
+            console.log(`- Door ${doorNum} is ${result.reason}, no action needed`);
+          } else {
+            console.log(`✓ Door ${doorNum} enabled successfully!`);
+          }
+        } catch (err) {
+          if (err instanceof AritechError) {
+            console.log(`✗ Failed to enable door ${doorNum}: ${err.message}`);
           } else {
             throw err;
           }
