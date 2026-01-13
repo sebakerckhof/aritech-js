@@ -81,10 +81,10 @@ export const messageTemplates = {
         }
     },
     'createOutputControlSession': {
-        msgId: 934,
-        msgIdBytes: [0xcc, 0x0e],
-        templateBytes: [0x00, 0x04, 0x00, 0x00, 0x00, 0x00],
-        payloadLength: 8,
+        msgId: 614,
+        msgIdBytes: [0xcc, 0x09],
+        templateBytes: [0x00, 0x04, 0x0f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        payloadLength: 12,
         properties: {
             ...generateBitmaskProps('area', 4, 1, 64),
             'typeId': [{ byte: 3, mask: 0xFF }],
@@ -131,11 +131,12 @@ export const messageTemplates = {
     'destroyControlSession': {
         msgId: -39,
         msgIdBytes: [0xcd, 0x00],
+        // Capture: c0cd00000300cc -> payload: 00 03 00 cc
+        // Position 0: 00, Position 1: 03, Position 2-3: sessionId (2 bytes)
         templateBytes: [0x00, 0x03, 0x00, 0x00],
-        payloadLength: 7,
+        payloadLength: 6,
         properties: {
-            'typeId': [{ byte: 3, mask: 0xFF }],
-            'sessionId': [{ byte: 4, mask: 0xFF }]
+            'sessionId': [{ byte: 4, mask: 0xFF }, { byte: 5, mask: 0xFF }]
         }
     },
     'deviceDescription': {
@@ -312,26 +313,38 @@ export const messageTemplates = {
             'sessionId': [{ byte: 4, mask: 0xFF }]
         }
     },
-    'activateOutput': {
-        msgId: -276584,
-        msgIdBytes: [0xcf, 0xe1, 0x21],
-        templateBytes: [0x02, 0x00, 0x00, 0x00, 0x00],
-        payloadLength: 8,
+    // Force output commands - these override output state with a forced status
+    // Capture: c0cf95210300cc00070006 -> payload: 03 00 cc 00 07 00 06
+    // Position 0: 03, Position 1-2: sessionId (2 bytes), Position 3: 00, Position 4: 07 (output type)
+    // Position 5-6: objectId (big-endian)
+    'forceActivateOutput': {
+        msgId: -271720,
+        msgIdBytes: [0xcf, 0x95, 0x21],
+        templateBytes: [0x03, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00],
+        payloadLength: 10,
         properties: {
-            'typeId': [{ byte: 3, mask: 0xFF }],
-            'sessionId': [{ byte: 4, mask: 0xFF }],
-            'objectId': [{ byte: 7, mask: 0xFF }]
+            'sessionId': [{ byte: 4, mask: 0xFF }, { byte: 5, mask: 0xFF }],
+            'objectId': [{ byte: 9, mask: 0xFF }, { byte: 8, mask: 0xFF }]
         }
     },
-    'deactivateOutput': {
-        msgId: -276648,
-        msgIdBytes: [0xcf, 0xe2, 0x21],
-        templateBytes: [0x02, 0x00, 0x00, 0x00, 0x00],
-        payloadLength: 8,
+    'cancelForceOutput': {
+        msgId: -271784,
+        msgIdBytes: [0xcf, 0x96, 0x21],
+        templateBytes: [0x03, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00],
+        payloadLength: 10,
         properties: {
-            'typeId': [{ byte: 3, mask: 0xFF }],
-            'sessionId': [{ byte: 4, mask: 0xFF }],
-            'objectId': [{ byte: 7, mask: 0xFF }]
+            'sessionId': [{ byte: 4, mask: 0xFF }, { byte: 5, mask: 0xFF }],
+            'objectId': [{ byte: 9, mask: 0xFF }, { byte: 8, mask: 0xFF }]
+        }
+    },
+    'forceDeactivateOutput': {
+        msgId: -271848,
+        msgIdBytes: [0xcf, 0x97, 0x21],
+        templateBytes: [0x03, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00],
+        payloadLength: 10,
+        properties: {
+            'sessionId': [{ byte: 4, mask: 0xFF }, { byte: 5, mask: 0xFF }],
+            'objectId': [{ byte: 9, mask: 0xFF }, { byte: 8, mask: 0xFF }]
         }
     },
     'activateTrigger': {
@@ -436,23 +449,27 @@ export const messageTemplates = {
     'inhibitZone': {
         msgId: -270568,
         msgIdBytes: [0xcf, 0x83, 0x21],
+        // Capture: c0cf832102023d000c -> payload: 02 02 3d 00 0c
+        // Position 0: typeId, Position 1-2: sessionId (2 bytes), Position 3: 00, Position 4: objectId
         templateBytes: [0x02, 0x00, 0x00, 0x00, 0x00],
         payloadLength: 8,
         properties: {
             'typeId': [{ byte: 3, mask: 0xFF }],
-            'sessionId': [{ byte: 4, mask: 0xFF }],
-            'objectId': [{ byte: 7, mask: 0xFF }]
+            'sessionId': [{ byte: 4, mask: 0xFF }, { byte: 5, mask: 0xFF }],
+            'objectId': [{ byte: 7, mask: 0xFF, type: 'byte' }]
         }
     },
     'uninhibitZone': {
         msgId: -270632,
         msgIdBytes: [0xcf, 0x84, 0x21],
+        // Capture: c0cf842102023e000c -> payload: 02 02 3e 00 0c
+        // Position 0: typeId, Position 1-2: sessionId (2 bytes), Position 3: 00, Position 4: objectId
         templateBytes: [0x02, 0x00, 0x00, 0x00, 0x00],
         payloadLength: 8,
         properties: {
             'typeId': [{ byte: 3, mask: 0xFF }],
-            'sessionId': [{ byte: 4, mask: 0xFF }],
-            'objectId': [{ byte: 7, mask: 0xFF }]
+            'sessionId': [{ byte: 4, mask: 0xFF }, { byte: 5, mask: 0xFF }],
+            'objectId': [{ byte: 7, mask: 0xFF, type: 'byte' }]
         }
     },
     'getUserInfo': {
@@ -744,8 +761,8 @@ export const messageTemplates = {
         templateBytes: [0x03, 0x00, 0x00],
         payloadLength: 4,
         properties: {
-            // Result is 2 bytes at positions 2-3 (little-endian)
-            // fnCC messages only use the low byte of this value
+            // SessionId is 2 bytes at positions 2-3 (response: a0 00 03 XX YY)
+            // Capture shows: a00003023d -> sessionId = 02 3d (little-endian = 0x3d02)
             'result': [{ byte: 2, mask: 0xFF }, { byte: 3, mask: 0xFF }]
         }
     },
@@ -1060,11 +1077,12 @@ export const messageTemplates = {
     'getControlSessionStatus': {
         msgId: 39,
         msgIdBytes: [0xce, 0x00],
+        // Capture: c0ce00000300cc -> payload: 00 03 00 cc
+        // Position 0: 00, Position 1: 03, Position 2-3: sessionId (2 bytes)
         templateBytes: [0x00, 0x03, 0x00, 0x00],
-        payloadLength: 7,
+        payloadLength: 6,
         properties: {
-            'typeId': [{ byte: 3, mask: 0xFF }],
-            'sessionId': [{ byte: 4, mask: 0xFF }]
+            'sessionId': [{ byte: 4, mask: 0xFF }, { byte: 5, mask: 0xFF }]
         }
     }
 };

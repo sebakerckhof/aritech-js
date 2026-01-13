@@ -110,8 +110,9 @@ if (!command) {
   console.log('  aritech doors                - Show door names and states');
   console.log('  aritech inhibit <zone>       - Inhibit a zone');
   console.log('  aritech uninhibit <zone>     - Uninhibit a zone');
-  console.log('  aritech activate <output>    - Activate an output');
-  console.log('  aritech deactivate <output>  - Deactivate an output');
+  console.log('  aritech force-activate <output>   - Force activate an output (override to ON)');
+  console.log('  aritech force-deactivate <output> - Force deactivate an output (override to OFF)');
+  console.log('  aritech cancel-force <output>     - Cancel force on output (return to normal)');
   console.log('  aritech trigger-activate <trigger>   - Activate a trigger');
   console.log('  aritech trigger-deactivate <trigger> - Deactivate a trigger');
   console.log('  aritech door-lock <door>     - Lock a door');
@@ -141,7 +142,8 @@ if (!command) {
   console.log('  aritech arm part1            - Part arm area 1 (default)');
   console.log('  aritech arm 1 full --force   - Force full arm area 1');
   console.log('  aritech outputs              - Show all outputs with states');
-  console.log('  aritech activate 1           - Activate output 1');
+  console.log('  aritech force-activate 1     - Force activate output 1 (override to ON)');
+  console.log('  aritech cancel-force 1       - Cancel force on output 1 (return to normal)');
   console.log('  aritech triggers             - Show all triggers with states');
   console.log('  aritech trigger-activate 1   - Activate trigger 1');
   process.exit(0);
@@ -592,37 +594,58 @@ try {
       } else {
         console.log('No outputs found on this panel.');
       }
-    } else if (command === 'activate') {
+    } else if (command === 'force-activate') {
       const outputNum = parseInt(args[1]);
       if (!outputNum || outputNum < 1) {
-        console.log('Usage: aritech activate <output_number>');
-        console.log('Example: aritech activate 1');
+        console.log('Usage: aritech force-activate <output_number>');
+        console.log('Example: aritech force-activate 1');
+        console.log('\nThis overrides the output to ON state. Use cancel-force to remove the override.');
       } else {
-        console.log(`\nActivating output ${outputNum}...`);
+        console.log(`\nForce activating output ${outputNum}...`);
         try {
-          await client.activateOutput(outputNum);
-          console.log(`✓ Output ${outputNum} activated successfully!`);
+          await client.forceActivateOutput(outputNum);
+          console.log(`✓ Output ${outputNum} force activated (overridden to ON)!`);
         } catch (err) {
           if (err instanceof AritechError) {
-            console.log(`✗ Failed to activate output ${outputNum}: ${err.message}`);
+            console.log(`✗ Failed to force activate output ${outputNum}: ${err.message}`);
           } else {
             throw err;
           }
         }
       }
-    } else if (command === 'deactivate') {
+    } else if (command === 'force-deactivate') {
       const outputNum = parseInt(args[1]);
       if (!outputNum || outputNum < 1) {
-        console.log('Usage: aritech deactivate <output_number>');
-        console.log('Example: aritech deactivate 1');
+        console.log('Usage: aritech force-deactivate <output_number>');
+        console.log('Example: aritech force-deactivate 1');
+        console.log('\nThis overrides the output to OFF state. Use cancel-force to remove the override.');
       } else {
-        console.log(`\nDeactivating output ${outputNum}...`);
+        console.log(`\nForce deactivating output ${outputNum}...`);
         try {
-          await client.deactivateOutput(outputNum);
-          console.log(`✓ Output ${outputNum} deactivated successfully!`);
+          await client.forceDeactivateOutput(outputNum);
+          console.log(`✓ Output ${outputNum} force deactivated (overridden to OFF)!`);
         } catch (err) {
           if (err instanceof AritechError) {
-            console.log(`✗ Failed to deactivate output ${outputNum}: ${err.message}`);
+            console.log(`✗ Failed to force deactivate output ${outputNum}: ${err.message}`);
+          } else {
+            throw err;
+          }
+        }
+      }
+    } else if (command === 'cancel-force') {
+      const outputNum = parseInt(args[1]);
+      if (!outputNum || outputNum < 1) {
+        console.log('Usage: aritech cancel-force <output_number>');
+        console.log('Example: aritech cancel-force 1');
+        console.log('\nThis removes the override and returns the output to its normal programmed state.');
+      } else {
+        console.log(`\nCanceling force on output ${outputNum}...`);
+        try {
+          await client.cancelForceOutput(outputNum);
+          console.log(`✓ Output ${outputNum} force canceled (returned to normal state)!`);
+        } catch (err) {
+          if (err instanceof AritechError) {
+            console.log(`✗ Failed to cancel force on output ${outputNum}: ${err.message}`);
           } else {
             throw err;
           }

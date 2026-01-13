@@ -78,8 +78,9 @@ Available commands:
   aritech doors                - Show door names and states
   aritech inhibit <zone>       - Inhibit a zone
   aritech uninhibit <zone>     - Uninhibit a zone
-  aritech activate <output>    - Activate an output
-  aritech deactivate <output>  - Deactivate an output
+  aritech force-activate <output>   - Force activate an output (override to ON)
+  aritech force-deactivate <output> - Force deactivate an output (override to OFF)
+  aritech cancel-force <output>     - Cancel force on output (return to normal)
   aritech trigger-activate <trigger>   - Activate a trigger
   aritech trigger-deactivate <trigger> - Deactivate a trigger
   aritech door-lock <door>     - Lock a door
@@ -111,7 +112,8 @@ Examples:
   aritech arm part1            - Part arm area 1 (default)
   aritech arm 1 full --force   - Force full arm area 1
   aritech outputs              - Show all outputs with states
-  aritech activate 1           - Activate output 1
+  aritech force-activate 1     - Force activate output 1 (override to ON)
+  aritech cancel-force 1       - Cancel force on output 1 (return to normal)
   aritech triggers             - Show all triggers with states
   aritech trigger-activate 1   - Activate trigger 1
 
@@ -142,7 +144,10 @@ Examples:
 - ✅ Read output names
 - ✅ Read output states
 - ✅ Monitor change events for outputs
-- ✅ Activate / Deactivate outputs
+- ✅ Force activate / Force deactivate / Cancel force outputs
+
+Note that only with an installer pin you can force the status of an output.
+An installer pin by default does not have arming/disarming permissions!
 
 ### Triggers
 - ✅ Read trigger names

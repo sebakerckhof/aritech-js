@@ -155,6 +155,7 @@ export const ErrorCodes = {
     // Output control errors
     OUTPUT_ACTIVATE_FAILED: 'OUTPUT_ACTIVATE_FAILED',
     OUTPUT_DEACTIVATE_FAILED: 'OUTPUT_DEACTIVATE_FAILED',
+    OUTPUT_CANCEL_FORCE_FAILED: 'OUTPUT_CANCEL_FORCE_FAILED',
 
     // Trigger control errors
     TRIGGER_ACTIVATE_FAILED: 'TRIGGER_ACTIVATE_FAILED',
@@ -536,23 +537,23 @@ export class AritechClient {
             const responsePromise = this._createResponseWaiter();
             this._sendEncryptedUnlocked(payload, key);
             const response = await responsePromise;
-        debug(`RECV (${response.length} bytes): ${response.toString('hex')}`);
-        const decrypted = decryptMessage(response, key, this.serialBytes);
-        debug(`Decrypted response: ${decrypted.toString('hex')}`);
-        if (throwOnError) {
-            try {
-                checkResponseError(decrypted);
-            } catch (err) {
-                // Convert plain Error from checkResponseError to AritechError
-                const errorCode = decrypted.length > 1 ? decrypted.slice(1).toString('hex') : 'unknown';
-                throw new AritechError(err.message, {
-                    code: ErrorCodes.PANEL_ERROR,
-                    panelError: errorCode,
-                    details: { response: decrypted.toString('hex') }
-                });
+            debug(`RECV (${response.length} bytes): ${response.toString('hex')}`);
+            const decrypted = decryptMessage(response, key, this.serialBytes);
+            debug(`Decrypted response: ${decrypted.toString('hex')}`);
+            if (throwOnError) {
+                try {
+                    checkResponseError(decrypted);
+                } catch (err) {
+                    // Convert plain Error from checkResponseError to AritechError
+                    const errorCode = decrypted.length > 1 ? decrypted.slice(1).toString('hex') : 'unknown';
+                    throw new AritechError(err.message, {
+                        code: ErrorCodes.PANEL_ERROR,
+                        panelError: errorCode,
+                        details: { response: decrypted.toString('hex') }
+                    });
+                }
             }
-        }
-        return decrypted;
+            return decrypted;
         });
     }
 
@@ -582,29 +583,29 @@ export class AritechClient {
             const responsePromise = this._createResponseWaiter();
             this._sendPlainUnlocked(payload);
             const response = await responsePromise;
-        debug(`RECV (${response.length} bytes): ${response.toString('hex')}`);
-        const decoded = slipDecode(response);
-        if (!verifyCrc(decoded)) {
-            throw new AritechError('Invalid CRC in plain response', {
-                code: ErrorCodes.CRC_ERROR,
-                details: { response: response.toString('hex') }
-            });
-        }
-        const result = decoded.slice(0, -2);  // Strip CRC
-        if (throwOnError) {
-            try {
-                checkResponseError(result);
-            } catch (err) {
-                // Convert plain Error from checkResponseError to AritechError
-                const errorCode = result.length > 1 ? result.slice(1).toString('hex') : 'unknown';
-                throw new AritechError(err.message, {
-                    code: ErrorCodes.PANEL_ERROR,
-                    panelError: errorCode,
-                    details: { response: result.toString('hex') }
+            debug(`RECV (${response.length} bytes): ${response.toString('hex')}`);
+            const decoded = slipDecode(response);
+            if (!verifyCrc(decoded)) {
+                throw new AritechError('Invalid CRC in plain response', {
+                    code: ErrorCodes.CRC_ERROR,
+                    details: { response: response.toString('hex') }
                 });
             }
-        }
-        return result;
+            const result = decoded.slice(0, -2);  // Strip CRC
+            if (throwOnError) {
+                try {
+                    checkResponseError(result);
+                } catch (err) {
+                    // Convert plain Error from checkResponseError to AritechError
+                    const errorCode = result.length > 1 ? result.slice(1).toString('hex') : 'unknown';
+                    throw new AritechError(err.message, {
+                        code: ErrorCodes.PANEL_ERROR,
+                        panelError: errorCode,
+                        details: { response: result.toString('hex') }
+                    });
+                }
+            }
+            return result;
         });
     }
 
@@ -758,7 +759,7 @@ export class AritechClient {
             canDiagnose: true,
             canReadLogs: true,
             pinCode: this.config.pin.toString(),
-            connectionMethod: 0x03
+            connectionMethod: 0x01
         });
 
         const response = await this.callEncrypted(loginPayload, this.sessionKey);
@@ -1495,48 +1496,76 @@ export class AritechClient {
     }
 
     /**
-     * Activate an output.
-     * @param {number} outputNum - Output number to activate
-     * @throws {AritechError} If activation fails
+     * Force activate an output (override to ON state).
+     * This sets the output to active and marks it as overridden.
+     * Use cancelForceOutput() to remove the override and return to normal state.
+     * @param {number} outputNum - Output number to force activate
+     * @throws {AritechError} If force activation fails
      */
-    async activateOutput(outputNum) {
-        debug(`\n=== Activating Output ${outputNum} ===`);
+    async forceActivateOutput(outputNum) {
+        debug(`\n=== Force Activating Output ${outputNum} ===`);
 
         await this._withControlSession('createOutputControlSession', { 'area.1': true }, async (sessionId) => {
-            debug(`  Calling activateOutput...`);
-            const payload = constructMessage('activateOutput', { sessionId, objectId: outputNum });
+            debug(`  Calling forceActivateOutput...`);
+            const payload = constructMessage('forceActivateOutput', { sessionId, objectId: outputNum });
             const response = await this.callEncrypted(payload, this.sessionKey);
 
             if (parseReturnBool(response) !== true) {
-                throw new AritechError(`Failed to activate output ${outputNum}`, {
+                throw new AritechError(`Failed to force activate output ${outputNum}`, {
                     code: ErrorCodes.OUTPUT_ACTIVATE_FAILED,
                     details: { outputNum, response: response ? response.toString('hex') : null }
                 });
             }
-            debug(`  ✓ Output ${outputNum} activated successfully!`);
+            debug(`  ✓ Output ${outputNum} force activated successfully!`);
         }, 'output', outputNum);
     }
 
     /**
-     * Deactivate an output.
-     * @param {number} outputNum - Output number to deactivate
-     * @throws {AritechError} If deactivation fails
+     * Force deactivate an output (override to OFF state).
+     * This sets the output to inactive and marks it as overridden.
+     * Use cancelForceOutput() to remove the override and return to normal state.
+     * @param {number} outputNum - Output number to force deactivate
+     * @throws {AritechError} If force deactivation fails
      */
-    async deactivateOutput(outputNum) {
-        debug(`\n=== Deactivating Output ${outputNum} ===`);
+    async forceDeactivateOutput(outputNum) {
+        debug(`\n=== Force Deactivating Output ${outputNum} ===`);
 
         await this._withControlSession('createOutputControlSession', { 'area.1': true }, async (sessionId) => {
-            debug(`  Calling deactivateOutput...`);
-            const payload = constructMessage('deactivateOutput', { sessionId, objectId: outputNum });
+            debug(`  Calling forceDeactivateOutput...`);
+            const payload = constructMessage('forceDeactivateOutput', { sessionId, objectId: outputNum });
             const response = await this.callEncrypted(payload, this.sessionKey);
 
             if (parseReturnBool(response) !== true) {
-                throw new AritechError(`Failed to deactivate output ${outputNum}`, {
+                throw new AritechError(`Failed to force deactivate output ${outputNum}`, {
                     code: ErrorCodes.OUTPUT_DEACTIVATE_FAILED,
                     details: { outputNum, response: response ? response.toString('hex') : null }
                 });
             }
-            debug(`  ✓ Output ${outputNum} deactivated successfully!`);
+            debug(`  ✓ Output ${outputNum} force deactivated successfully!`);
+        }, 'output', outputNum);
+    }
+
+    /**
+     * Cancel force status on an output (remove override).
+     * This removes the override flag and returns the output to its normal programmed state.
+     * @param {number} outputNum - Output number to cancel force on
+     * @throws {AritechError} If cancel force fails
+     */
+    async cancelForceOutput(outputNum) {
+        debug(`\n=== Canceling Force on Output ${outputNum} ===`);
+
+        await this._withControlSession('createOutputControlSession', { 'area.1': true }, async (sessionId) => {
+            debug(`  Calling cancelForceOutput...`);
+            const payload = constructMessage('cancelForceOutput', { sessionId, objectId: outputNum });
+            const response = await this.callEncrypted(payload, this.sessionKey);
+
+            if (parseReturnBool(response) !== true) {
+                throw new AritechError(`Failed to cancel force on output ${outputNum}`, {
+                    code: ErrorCodes.OUTPUT_CANCEL_FORCE_FAILED,
+                    details: { outputNum, response: response ? response.toString('hex') : null }
+                });
+            }
+            debug(`  ✓ Output ${outputNum} force canceled successfully!`);
         }, 'output', outputNum);
     }
 
