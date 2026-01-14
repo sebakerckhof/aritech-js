@@ -108,6 +108,7 @@ if (!command) {
   console.log('  aritech outputs              - Show output names and states');
   console.log('  aritech triggers             - Show trigger names and states');
   console.log('  aritech doors                - Show door names and states');
+  console.log('  aritech filters              - Show filter names and states');
   console.log('  aritech inhibit <zone>       - Inhibit a zone');
   console.log('  aritech uninhibit <zone>     - Uninhibit a zone');
   console.log('  aritech force-activate <output>   - Force activate an output (override to ON)');
@@ -186,7 +187,8 @@ try {
         console.log(`  Areas: ${data.areas.length} tracked`);
         console.log(`  Outputs: ${data.outputs.length} tracked`);
         console.log(`  Triggers: ${data.triggers.length} tracked`);
-        console.log(`  Doors: ${data.doors.length} tracked\n`);
+        console.log(`  Doors: ${data.doors.length} tracked`);
+        console.log(`  Filters: ${data.filters.length} tracked\n`);
       });
 
       monitor.on('zoneChanged', (event) => {
@@ -279,6 +281,19 @@ try {
           const oldState = oldData?.state || 'unknown';
           const newState = newData?.state || 'unknown';
           console.log(`🚪 Door ${id} (${name}): ${oldState} → ${newState}`);
+        }
+      });
+
+      monitor.on('filterChanged', (event) => {
+        const { id, name, oldData, newData } = event;
+
+        if (process.env.LOG_LEVEL === 'debug') {
+          console.log(`🔲 Filter ${id} (${name}) changed:`);
+          console.log(`   State: ${JSON.stringify(oldData, null, 2)} → ${JSON.stringify(newData, null, 2)}`);
+        } else {
+          const oldState = oldData?.state || 'unknown';
+          const newState = newData?.state || 'unknown';
+          console.log(`🔲 Filter ${id} (${name}): ${oldState} → ${newState}`);
         }
       });
 
@@ -890,6 +905,41 @@ try {
             throw err;
           }
         }
+      }
+    } else if (command === 'filters') {
+      // Query both names and states, then merge them
+      console.log('\nQuerying filter names...');
+      const filters = await client.getFilterNames();
+      console.log(`Found ${filters.length} filters\n`);
+
+      if (filters.length > 0) {
+        console.log('Querying filter states...');
+        const states = await client.getFilterStates(filters.map(f => f.number));
+
+        // Merge names with states
+        const merged = filters.map(filter => {
+          const stateInfo = states.find(s => s.filter === filter.number);
+          return {
+            number: filter.number,
+            name: filter.name,
+            state: stateInfo ? stateInfo.state : null,
+            rawHex: stateInfo ? stateInfo.rawHex : null
+          };
+        });
+
+        console.log('\nFilters:');
+        merged.forEach(filter => {
+          const icon = filter.state?.isActive ? '🟢' : '⚫';
+          console.log(`  ${icon} Filter ${filter.number}: ${filter.name}`);
+          console.log(`     State: ${filter.state?.toString() || 'unknown'}`);
+        });
+
+        if (process.env.LOG_LEVEL === 'debug') {
+          console.log('\nDetailed filter data:');
+          console.log(JSON.stringify(merged, null, 2));
+        }
+      } else {
+        console.log('No filters found on this panel.');
       }
     } else {
       console.log(`Unknown command: ${command}`);

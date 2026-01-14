@@ -530,6 +530,15 @@ export const messageTemplates = {
             'typeId': [{ byte: 3, mask: 0xFF }]
         }
     },
+    'getFilterChanges': {
+        msgId: 549,
+        msgIdBytes: [0xca, 0x08],
+        templateBytes: [0x00, 0x00],
+        payloadLength: 4,
+        properties: {
+            'typeId': [{ byte: 3, mask: 0xFF }]
+        }
+    },
     'getZoneChanges': {
         msgId: 101,
         msgIdBytes: [0xca, 0x01],
@@ -572,6 +581,16 @@ export const messageTemplates = {
     'getDoorStatus': {
         msgId: -742,
         msgIdBytes: [0xcb, 0x0b],
+        templateBytes: [0x00, 0x03, 0x00, 0x00],
+        payloadLength: 6,
+        properties: {
+            'typeId': [{ byte: 3, mask: 0xFF }],
+            'objectId': [{ byte: 5, mask: 0xFF }]
+        }
+    },
+    'getFilterStatus': {
+        msgId: -550,
+        msgIdBytes: [0xcb, 0x08],
         templateBytes: [0x00, 0x03, 0x00, 0x00],
         payloadLength: 6,
         properties: {
@@ -659,6 +678,16 @@ export const messageTemplates = {
         msgId: -13,
         msgIdBytes: [0x19],
         templateBytes: [0x0b, 0x00, 0x00, 0x10],
+        payloadLength: 5,
+        properties: {
+            'name': [{ byte: -1, mask: 0xFF, length: 16, type: 'string' }],
+            'index': [{ byte: 3, mask: 0xFF }]
+        }
+    },
+    'filterNames': {
+        msgId: -13,
+        msgIdBytes: [0x19],
+        templateBytes: [0x08, 0x00, 0x00, 0x10],
         payloadLength: 5,
         properties: {
             'name': [{ byte: -1, mask: 0xFF, length: 16, type: 'string' }],
@@ -984,6 +1013,16 @@ export const messageTemplates = {
             'hasInvalidWireType': [{ byte: 6, mask: 0x1 }]
         }
     },
+    'filterStatus': {
+        msgId: -25,
+        msgIdBytes: [0x31],
+        templateBytes: [0x08, 0x00, 0x00, 0x00],
+        payloadLength: 5,
+        properties: {
+            'objectId': [{ byte: 3, mask: 0xFF }],
+            'isActive': [{ byte: 4, mask: 0x1 }]
+        }
+    },
     'getAreaNames': {
         msgId: 12,
         msgIdBytes: [0x18],
@@ -1018,6 +1057,16 @@ export const messageTemplates = {
         msgId: 12,
         msgIdBytes: [0x18],
         templateBytes: [0x0b, 0x00, 0x03, 0x00, 0x00],
+        payloadLength: 6,
+        properties: {
+            'typeId': [{ byte: 3, mask: 0xFF }],
+            'index': [{ byte: 5, mask: 0xFF }]
+        }
+    },
+    'getFilterNames': {
+        msgId: 12,
+        msgIdBytes: [0x18],
+        templateBytes: [0x08, 0x00, 0x03, 0x00, 0x00],
         payloadLength: 6,
         properties: {
             'typeId': [{ byte: 3, mask: 0xFF }],

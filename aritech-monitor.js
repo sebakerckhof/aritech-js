@@ -17,6 +17,7 @@ const COS_CHANGE_TYPES = {
     ZONE: 0x01,
     AREA: 0x02,
     OUTPUT: 0x07,
+    FILTER: 0x08,
     DOOR: 0x0b,
     TRIGGER: 0x14,
     ALL: 0xFF
@@ -50,7 +51,8 @@ const debug = (...args) => {
  * - 'outputChanged': { id, name, oldData, newData }
  * - 'triggerChanged': { id, name, oldData, newData }
  * - 'doorChanged': { id, name, oldData, newData }
- * - 'initialized': { zones, areas, outputs, triggers, doors }
+ * - 'filterChanged': { id, name, oldData, newData }
+ * - 'initialized': { zones, areas, outputs, triggers, doors, filters }
  * - 'error': Error object
  *
  * @example
@@ -71,11 +73,13 @@ export class AritechMonitor extends EventEmitter {
         this.outputs = [];         // Array of {number, name}
         this.triggers = [];        // Array of {number, name}
         this.doors = [];           // Array of {number, name}
+        this.filters = [];         // Array of {number, name}
         this.zoneStates = {};      // Map of zoneNum -> state data
         this.areaStates = {};      // Map of areaNum -> state data
         this.outputStates = {};    // Map of outputNum -> state data
         this.triggerStates = {};   // Map of triggerNum -> state data
         this.doorStates = {};      // Map of doorNum -> state data
+        this.filterStates = {};    // Map of filterNum -> state data
 
         // Internal state
         this.running = false;
@@ -169,6 +173,14 @@ export class AritechMonitor extends EventEmitter {
     }
 
     /**
+     * Get current state of all filters.
+     * @returns {Object} Map of filter number to state data
+     */
+    getFilterStates() {
+        return { ...this.filterStates };
+    }
+
+    /**
      * Initialize by fetching all zone/area names and their current states.
      * @private
      */
@@ -257,6 +269,23 @@ export class AritechMonitor extends EventEmitter {
             debug(`  Captured state for ${Object.keys(this.doorStates).length} doors`);
         }
 
+        // Fetch filter names
+        debug('Fetching filter names...');
+        this.filters = await this.client.getFilterNames();
+        debug(`  Found ${this.filters.length} filters`);
+
+        // Fetch initial filter states
+        if (this.filters.length > 0) {
+            debug('Fetching initial filter states...');
+            const filterStates = await this.client.getFilterStates(this.filters.map(f => f.number));
+            for (const filterState of filterStates) {
+                this.filterStates[filterState.filter] = {
+                    ...filterState,
+                };
+            }
+            debug(`  Captured state for ${Object.keys(this.filterStates).length} filters`);
+        }
+
         // Emit initialized event
         this.emit('initialized', {
             zones: this.zones,
@@ -264,11 +293,13 @@ export class AritechMonitor extends EventEmitter {
             outputs: this.outputs,
             triggers: this.triggers,
             doors: this.doors,
+            filters: this.filters,
             zoneStates: this.getZoneStates(),
             areaStates: this.getAreaStates(),
             outputStates: this.getOutputStates(),
             triggerStates: this.getTriggerStates(),
-            doorStates: this.getDoorStates()
+            doorStates: this.getDoorStates(),
+            filterStates: this.getFilterStates()
         });
 
         debug('✓ Initialization complete\n');
@@ -329,6 +360,8 @@ export class AritechMonitor extends EventEmitter {
                 changeType = 'area';
             } else if (typeByte === COS_CHANGE_TYPES.OUTPUT) {
                 changeType = 'output';
+            } else if (typeByte === COS_CHANGE_TYPES.FILTER) {
+                changeType = 'filter';
             } else if (typeByte === COS_CHANGE_TYPES.TRIGGER) {
                 changeType = 'trigger';
             } else if (typeByte === COS_CHANGE_TYPES.DOOR) {
@@ -348,10 +381,12 @@ export class AritechMonitor extends EventEmitter {
         // - Message ID 101 (ca01) for zones
         // - Message ID 165 (ca02) for areas
         // - Message ID 421 (ca07) for outputs
+        // - Message ID 549 (ca08) for filters
         // - Message ID 1205 (ca14) for triggers
         let changedZones = [];
         let changedAreas = [];
         let changedOutputs = [];
+        let changedFilters = [];
         let changedTriggers = [];
         let changedDoors = [];
 
@@ -399,6 +434,22 @@ export class AritechMonitor extends EventEmitter {
                 if (bitmapType === COS_CHANGE_TYPES.OUTPUT) {
                     changedOutputs = this._parseBitmap(bitmap, this.outputs.map(o => o.number));
                     debug(`  Changed outputs: ${changedOutputs.join(', ') || 'none'}`);
+                }
+            }
+        }
+
+        if (changeType === 'filter' || changeType === 'all') {
+            const filterResponse = await this.client.callEncrypted(constructMessage('getFilterChanges'), this.client.sessionKey);
+
+            if (filterResponse && filterResponse.length >= 3 &&
+                filterResponse[0] === HEADER_RESPONSE && filterResponse[1] === 0x30) {
+                const bitmapType = filterResponse[2];
+                const bitmap = filterResponse.slice(3);
+                debug(`  Filter bitmap response type: 0x${bitmapType.toString(16)}, data: ${bitmap.toString('hex')}`);
+
+                if (bitmapType === COS_CHANGE_TYPES.FILTER) {
+                    changedFilters = this._parseBitmap(bitmap, this.filters.map(f => f.number));
+                    debug(`  Changed filters: ${changedFilters.join(', ') || 'none'}`);
                 }
             }
         }
@@ -460,6 +511,15 @@ export class AritechMonitor extends EventEmitter {
             debug(`  No specific outputs in bitmap, fetching all`);
             const allOutputNumbers = this.outputs.map(o => o.number);
             await this._updateOutputStates(allOutputNumbers);
+        }
+
+        if (changedFilters.length > 0) {
+            await this._updateFilterStates(changedFilters);
+        } else if (changeType === 'filter' || changeType === 'all') {
+            // Fallback: fetch all filters if no specific bitmap
+            debug(`  No specific filters in bitmap, fetching all`);
+            const allFilterNumbers = this.filters.map(f => f.number);
+            await this._updateFilterStates(allFilterNumbers);
         }
 
         if (changedTriggers.length > 0) {
@@ -703,6 +763,44 @@ export class AritechMonitor extends EventEmitter {
 
             // Update stored state
             this.doorStates[doorNum] = { ...newState };
+        }
+    }
+
+    /**
+     * Update filter states and emit events for changes.
+     * @private
+     * @param {number[]} filterNumbers - Filter numbers to update
+     */
+    async _updateFilterStates(filterNumbers) {
+        if (filterNumbers.length === 0) return;
+
+        const newStates = await this.client.getFilterStates(filterNumbers);
+
+        for (const newState of newStates) {
+            const filterNum = newState.filter;
+            const oldState = this.filterStates[filterNum];
+
+            // Check if changed by comparing raw bytes
+            const hasChanged = !oldState || oldState.rawHex !== newState.rawHex;
+
+            if (hasChanged) {
+                // Find filter name
+                const filter = this.filters.find(f => f.number === filterNum);
+                const filterName = filter?.name || `Filter ${filterNum}`;
+
+                // Emit event
+                this.emit('filterChanged', {
+                    id: filterNum,
+                    name: filterName,
+                    oldData: oldState ? { ...oldState } : null,
+                    newData: { ...newState }
+                });
+
+                debug(`  🔔 Filter ${filterNum} (${filterName}): ${oldState?.rawHex || 'NEW'} → ${newState.rawHex}`);
+            }
+
+            // Update stored state
+            this.filterStates[filterNum] = { ...newState };
         }
     }
 

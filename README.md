@@ -76,6 +76,7 @@ Available commands:
   aritech outputs              - Show output names and states
   aritech triggers             - Show trigger names and states
   aritech doors                - Show door names and states
+  aritech filters              - Show filter names and states
   aritech inhibit <zone>       - Inhibit a zone
   aritech uninhibit <zone>     - Uninhibit a zone
   aritech force-activate <output>   - Force activate an output (override to ON)
@@ -149,6 +150,9 @@ Examples:
 Note that only with an installer pin you can force the status of an output.
 An installer pin by default does not have arming/disarming permissions!
 
+When using an installer pin you have to specify the login type as:
+`client.loginWithPin(LOGIN_TYPE.INSTALLER)`. Note that you can have only 1 installer login active, so ATS8500 will not work correctly while logged in with the client as installer.
+
 ### Triggers
 - ✅ Read trigger names
 - ✅ Read trigger states
@@ -162,6 +166,13 @@ An installer pin by default does not have arming/disarming permissions!
 - ✅ Enable / Disable doors
 - ✅ Lock / Unlock doors
 - ✅ Timed and standard time unlock
+
+### Filters
+- ✅ Read filter names
+- ✅ Read filter states (read-only, on/off)
+- ✅ Monitor change events for filters
+
+Filters are read-only entities that represent logical conditions in the panel. They have a simple active/inactive state and cannot be controlled directly.
 
 ## Contributing
 

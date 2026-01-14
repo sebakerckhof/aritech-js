@@ -352,6 +352,7 @@ const BATCH_PAYLOAD_LENGTHS = {
     'triggerStatus': 5,
     'outputStatus': 5,
     'doorStatus': 6,
+    'filterStatus': 5,
 };
 
 /**
@@ -459,6 +460,7 @@ const GET_STAT_MSG_NAMES = {
     OUTPUT: 'getOutputStatus',
     TRIGGER: 'getTriggerStatus',
     DOOR: 'getDoorStatus',
+    FILTER: 'getFilterStatus',
 };
 
 /**

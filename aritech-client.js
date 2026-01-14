@@ -28,6 +28,7 @@ import ZoneState from './ZoneState.js';
 import TriggerState from './TriggerState.js';
 import OutputState from './OutputState.js';
 import DoorState from './DoorState.js';
+import FilterState from './FilterState.js';
 
 // Create bound message helpers for this template set
 const {
@@ -60,6 +61,11 @@ const EVENT_LOG_DIRECTION = {
     FIRST: 0x00,
     NEXT: 0x03,
 };
+
+export const LOGIN_TYPE = {
+    INSTALLER: 0x01,
+    USER: 0x03,
+}
 
 // Control context status codes for arm operations
 const CC_STATUS = {
@@ -729,21 +735,23 @@ export class AritechClient {
      * Login to the panel - auto-selects method based on config.
      * Uses loginWithAccount if username is configured, otherwise loginWithPin.
      * Starts keep-alive timer on success.
+     * @param {number} loginType - Login type (from LOGIN_TYPE enum)
      * @returns {Promise<boolean>} True if login successful
      */
-    async login() {
+    async login(loginType) {
         if (this.config.username) {
-            return this.loginWithAccount();
+            return this.loginWithAccount(loginType);
         }
-        return this.loginWithPin();
+        return this.loginWithPin(loginType);
     }
 
     /**
      * Login to the panel with configured PIN (x500 panels).
      * Starts keep-alive timer on success.
+     * @param {number} loginType - Login type (from LOGIN_TYPE enum)
      * @returns {Promise<boolean>} True if login successful
      */
-    async loginWithPin() {
+    async loginWithPin(loginType = LOGIN_TYPE.USER) {
         debug('\n=== Login (PIN) ===');
         debug(`PIN: ${this.config.pin}`);
 
@@ -759,7 +767,7 @@ export class AritechClient {
             canDiagnose: true,
             canReadLogs: true,
             pinCode: this.config.pin.toString(),
-            connectionMethod: 0x01
+            connectionMethod: loginType
         });
 
         const response = await this.callEncrypted(loginPayload, this.sessionKey);
@@ -787,9 +795,10 @@ export class AritechClient {
     /**
      * Login to the panel with username/password (x700 panels).
      * Starts keep-alive timer on success.
+     * @param {number} loginType - Login type (from LOGIN_TYPE enum)
      * @returns {Promise<boolean>} True if login successful
      */
-    async loginWithAccount() {
+    async loginWithAccount(loginType = LOGIN_TYPE.USER) {
         debug('\n=== Login (Account) ===');
         debug(`Username: ${this.config.username}`);
 
@@ -806,7 +815,7 @@ export class AritechClient {
             canReadLogs: true,
             username: this.config.username,
             password: this.config.password || this.config.username,  // Default password to username if not set
-            connectionMethod: 0x03
+            connectionMethod: loginType
         });
 
         const response = await this.callEncrypted(loginPayload, this.sessionKey);
@@ -1950,6 +1959,66 @@ export class AritechClient {
 
         debug(`Batch received ${outputStates.length} output states`);
         return outputStates;
+    }
+
+    // ========================================================================
+    // FILTER METHODS
+    // ========================================================================
+
+    /**
+     * Get filter names from the panel.
+     * @returns {Promise<Array>} Array of filter objects with {number, name}
+     */
+    async getFilterNames() {
+        return this._getNames('getFilterNames', 'filterNames', {
+            entityName: 'Filter'
+        });
+    }
+
+    /**
+     * Get filter states using batch request.
+     * Filters are read-only entities with a simple on/off (active/inactive) state.
+     *
+     * @param {Array|number} filtersOrMax - Array of filter numbers or max filter count
+     * @returns {Promise<Array>} Array of filter state objects
+     */
+    async getFilterStates(filtersOrMax = 64) {
+        debug('\n=== Querying Filter States (Batch) ===');
+
+        const filterNumbers = Array.isArray(filtersOrMax)
+            ? (typeof filtersOrMax[0] === 'object' ? filtersOrMax.map(f => f.number) : filtersOrMax)
+            : Array.from({ length: filtersOrMax }, (_, i) => i + 1);
+
+        if (filterNumbers.length === 0) return [];
+
+        const batchPayload = buildBatchStatRequest('FILTER', filterNumbers);
+        debug(`Batch requesting ${filterNumbers.length} filters in single call`);
+
+        const response = await this.callEncrypted(batchPayload, this.sessionKey);
+
+        if (!response || response.length < 4) {
+            debug('No valid batch response');
+            return [];
+        }
+
+        const messages = splitBatchResponse(response, 'filterStatus');
+        if (messages.length === 0) {
+            debug(`No messages parsed from batch response`);
+            return [];
+        }
+
+        const filterStates = [];
+        for (const msg of messages) {
+            const state = FilterState.fromBytes(msg.bytes);
+            filterStates.push({
+                filter: msg.objectId,
+                state,
+                rawHex: msg.bytes.toString('hex')
+            });
+        }
+
+        debug(`Batch received ${filterStates.length} filter states`);
+        return filterStates;
     }
 
     /**
