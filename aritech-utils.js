@@ -211,6 +211,29 @@ export function makeEncryptionKey(password) {
     return result;
 }
 
+/**
+ * Derive encryption key using PBKDF2 (for x700/Everon panels).
+ *
+ * x700 panels use PBKDF2 with:
+ * - Password: the full encryption password string
+ * - Salt: 8 zero bytes
+ * - Iterations: 1000
+ * - Key length: 32 bytes (AES-256)
+ * - Hash: SHA-1
+ *
+ * @param {string} password - Encryption password (24 characters)
+ * @returns {Buffer} 32-byte encryption key for AES-256
+ */
+export function makeEncryptionKeyPBKDF2(password) {
+    if (!password) return Buffer.alloc(32);
+
+    const salt = Buffer.alloc(8);  // 8 zero bytes
+    const iterations = 1000;
+    const keyLength = 32;  // AES-256
+
+    return crypto.pbkdf2Sync(password, salt, iterations, keyLength, 'sha1');
+}
+
 // ============================================================================
 // SERIAL NUMBER DECODING
 // ============================================================================

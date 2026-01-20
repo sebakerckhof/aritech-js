@@ -18,6 +18,7 @@ import {
     appendCrc,
     verifyCrc,
     makeEncryptionKey,
+    makeEncryptionKeyPBKDF2,
     decodeSerial,
     calculateProtocolVersion,
     encryptMessage,
@@ -202,6 +203,7 @@ export class AritechClient {
         this.panelName = null;    // e.g., "Paneel"
         this.firmwareVersion = null;
         this.protocolVersion = null;  // Calculated from firmware version
+        this.encryptionMode = null;   // 1=AES-128, 2=AES-256, 5=PBKDF2+AES-256
 
         // Monitoring mode state
         this.monitoringActive = false;
@@ -272,6 +274,16 @@ export class AritechClient {
      */
     isX700Panel() {
         return this.panelModel && /ATS\d700/.test(this.panelModel);
+    }
+
+    /**
+     * Check if this panel uses PBKDF2 key derivation.
+     * Encryption mode 5 uses PBKDF2 + AES-256 with 32-byte session keys.
+     * Other modes (1, 2) use grayPack key derivation with 16-byte session keys.
+     * @returns {boolean} True if PBKDF2 mode
+     */
+    usesPBKDF2() {
+        return this.encryptionMode === 5;
     }
 
     /**
@@ -659,10 +671,16 @@ export class AritechClient {
                 this.serialBytes = decodeSerial(serial);
             }
 
+            // Encryption mode - byte 79 from start of response (callPlain returns full response without CRC)
+            // Mode 1/2: grayPack + AES-128/192/256 with 16-byte session key
+            // Mode 5: PBKDF2 + AES-256 with 32-byte session key
+            this.encryptionMode = payload[79];
+
             debug(`Panel: ${this.panelName || 'unknown'}`);
             debug(`Model: ${this.panelModel || 'unknown'} (${this.getMaxAreaCount()} areas, ${this.getMaxZoneCount()} zones max)`);
             debug(`Firmware: ${this.firmwareVersion || 'unknown'}`);
             debug(`Protocol: ${this.protocolVersion || 'unknown'}`);
+            debug(`Encryption mode: ${this.encryptionMode}`);
         } catch (e) {
             debug('Could not parse panel description fields:', e.message);
         }
@@ -671,6 +689,14 @@ export class AritechClient {
         if (this.serialBytes) {
             debug(`Serial: ${this.config.serial}`);
             debug(`Serial bytes: ${this.serialBytes.toString('hex')}`);
+        }
+
+        // Encryption mode 5 uses PBKDF2 key derivation with AES-256
+        // Other modes (1, 2) use grayPack with AES-128/192/256
+        if (this.usesPBKDF2()) {
+            debug(`Encryption mode ${this.encryptionMode} - using PBKDF2 key derivation (AES-256)`);
+            this.initialKey = makeEncryptionKeyPBKDF2(this.config.encryptionKey);
+            debug(`New initial key (32 bytes): ${this.initialKey.toString('hex')}`);
         }
 
         return {
@@ -693,11 +719,15 @@ export class AritechClient {
         debug('\n=== Key Exchange ===');
         debug(`Initial key: ${this.initialKey.toString('hex')}`);
 
-        // 1. Send createSession with 8 zeros as our key half
-        const clientKeyBytes = Buffer.alloc(8);  // 8 zeros
+        // 1. Send createSession with client key contribution
+        // PBKDF2 mode (5): 16-byte client key → 32-byte session key (AES-256)
+        // Other modes: 8-byte client key + 8-byte padding → 16-byte session key (AES-128)
+        const clientKeyBytes = this.usesPBKDF2() ? Buffer.alloc(16) : Buffer.alloc(8);
         const beginPayload = constructMessage('createSession', {
             typeId: 0x09,
-            data: Buffer.concat([clientKeyBytes, Buffer.alloc(8)])  // 8-byte key + 8-byte padding
+            data: this.usesPBKDF2()
+                ? clientKeyBytes  // PBKDF2: full 16 bytes
+                : Buffer.concat([clientKeyBytes, Buffer.alloc(8)])  // grayPack: 8-byte key + 8-byte padding
         });
 
         debug('\n1. Sending createSession...');
@@ -707,14 +737,21 @@ export class AritechClient {
             throw new Error('Failed to decrypt createSession response');
         }
 
-        // Extract panel's 8-byte key portion from response
-        // Response format: [0xA0 header][0x00 0x09 msgId + data][8 bytes panel key][padding]
-        const panelKeyBytes = beginResponse.slice(3, 11);
-        debug(`Panel key bytes: ${panelKeyBytes.toString('hex')}`);
-
-        // 2. Build session key: [client 8 bytes][panel 8 bytes]
-        this.sessionKey = Buffer.concat([clientKeyBytes, panelKeyBytes]);
-        debug(`Session key: ${this.sessionKey.toString('hex')}`);
+        // 2. Extract panel's key contribution and build session key
+        // Response format: [0xA0 header][0x00 0x09 msgId + data][panel key bytes]
+        if (this.usesPBKDF2()) {
+            // PBKDF2 mode: extract 16-byte panel key, build 32-byte session key
+            const panelKeyBytes = beginResponse.slice(3, 19);
+            debug(`Panel key bytes (16): ${panelKeyBytes.toString('hex')}`);
+            this.sessionKey = Buffer.concat([clientKeyBytes, panelKeyBytes]);
+            debug(`Session key (32 bytes): ${this.sessionKey.toString('hex')}`);
+        } else {
+            // grayPack mode: extract 8-byte panel key, build 16-byte session key
+            const panelKeyBytes = beginResponse.slice(3, 11);
+            debug(`Panel key bytes (8): ${panelKeyBytes.toString('hex')}`);
+            this.sessionKey = Buffer.concat([clientKeyBytes, panelKeyBytes]);
+            debug(`Session key (16 bytes): ${this.sessionKey.toString('hex')}`);
+        }
 
         // 3. Send enableEncryptionKey (still with initial key!)
         const endPayload = constructMessage('enableEncryptionKey', {
