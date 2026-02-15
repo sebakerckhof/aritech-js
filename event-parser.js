@@ -98,7 +98,7 @@ function readField(buffer, fieldDef) {
 
     if (type === 'string') {
         // eslint-disable-next-line no-control-regex
-        return buffer.slice(offset, offset + length).toString('ascii').replace(/\x00/g, '').trim();
+        return buffer.slice(offset, offset + length).toString('latin1').replace(/\x00/g, '').trim();
     }
 
     if (length === 1) {

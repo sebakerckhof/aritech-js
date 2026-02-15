@@ -1,6 +1,6 @@
 {
   "name": "aritech-client",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "JavaScript client for communicating with Aritech ATS alarm panels (ATS1500AIP tested). Supports programmatic usage and CLI.",
   "main": "index.js",
   "type": "module",

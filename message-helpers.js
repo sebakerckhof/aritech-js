@@ -190,7 +190,7 @@ export function getProperty(templates, msgName, payload, propertyName) {
             return '';
         }
         return payload.slice(byteOffset + 1, byteOffset + 1 + strLen)
-            .toString('ascii')
+            .toString('latin1')
             .replace(/\0/g, '')
             .trim();
     }
@@ -282,7 +282,7 @@ export function getAllProperties(templates, msgName, payload) {
                     const strLen = payload[byteOffset];
                     if (strLen > 0 && byteOffset + 1 + strLen <= payload.length) {
                         result[propName] = payload.slice(byteOffset + 1, byteOffset + 1 + strLen)
-                            .toString('ascii')
+                            .toString('latin1')
                             .replace(/\0/g, '')
                             .trim();
                     } else {

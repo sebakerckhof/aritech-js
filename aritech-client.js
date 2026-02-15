@@ -893,7 +893,7 @@ export class AritechClient {
         if (response && response[0] === HEADER.RESPONSE) {
             // Response contains user name at offset 6, 16 bytes
             if (response.length >= 22) {
-                const userName = response.slice(6, 22).toString('ascii').replace(/\0+$/, '').trim();
+                const userName = response.slice(6, 22).toString('latin1').replace(/\0+$/, '').trim();
                 if (userName) {
                     debug(`Logged in as: ${userName}`);
                 }
@@ -1006,7 +1006,7 @@ export class AritechClient {
                     if (maxCount && entityNum > maxCount) break;
 
                     const nameBytes = response.slice(offset, offset + nameLength);
-                    const name = nameBytes.toString('ascii').replace(/\0+$/, '').trim();
+                    const name = nameBytes.toString('latin1').replace(/\0+$/, '').trim();
 
                     if (name) {
                         // Filter by validNumbers if provided
