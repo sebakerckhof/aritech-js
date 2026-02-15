@@ -76,6 +76,33 @@ const EVENT_FIELDS_NEW = {
     description: { byte: 28, length: 32, type: 'string' }
 };
 
+/**
+ * Event field byte offsets for x000 panels (70-byte event buffer).
+ * x000 panels use a 1-byte event ID (max 241), shifting eventSource
+ * and subsequent fields 1 byte earlier. Area, details, and description
+ * remain at the same offsets as x500.
+ */
+const EVENT_FIELDS_X000 = {
+    // Header and timestamp
+    header: { byte: 0, length: 2 },
+    timestamp: { byte: 2, length: 6 },  // BCD format: YYMMDDhhmmss
+
+    // Event identification
+    sequence: { byte: 12, length: 1 },
+    logType: { byte: 13, length: 1 },
+    eventId: { byte: 14, length: 1 },                  // 1 byte (x000 events 0-241)
+    eventSource: { byte: 15, length: 1 },               // shifted from byte 16
+    sourceSubId: { byte: 16, length: 1 },               // shifted from byte 17
+    entityId: { byte: 17, length: 2, bigEndian: true },  // shifted from bytes 18-19
+    area: { byte: 20, length: 1 },
+
+    // Detail fields (context-dependent based on event type)
+    details: { byte: 21, length: 7 },
+
+    // Description text (42 bytes for x000)
+    description: { byte: 28, length: 42, type: 'string' }
+};
+
 // Alias for backwards compatibility
 const EVENT_FIELDS = EVENT_FIELDS_OLD;
 
@@ -143,16 +170,20 @@ function parseBcdTimestamp(buffer, offset) {
  * - 70 bytes: Legacy format (x500 panels with protocol < 4.4)
  *
  * @param {Buffer} eventBuffer - 60 or 70-byte event data
+ * @param {Object} [options] - Parsing options
+ * @param {boolean} [options.isX000] - Use x000 event format (1-byte eventId)
  * @returns {Object} Parsed event object
  */
-export function parseEvent(eventBuffer) {
+export function parseEvent(eventBuffer, options = {}) {
     if (!Buffer.isBuffer(eventBuffer)) {
         throw new Error('Input must be a Buffer');
     }
 
-    // Auto-detect format based on buffer length
+    // Auto-detect format based on buffer length and panel type
     let fields;
-    if (eventBuffer.length === 60) {
+    if (options.isX000 && eventBuffer.length === 70) {
+        fields = EVENT_FIELDS_X000;  // x000 format (1-byte eventId)
+    } else if (eventBuffer.length === 60) {
         fields = EVENT_FIELDS_NEW;  // Extended format (x700, x500 4.4+)
     } else if (eventBuffer.length === 70) {
         fields = EVENT_FIELDS_OLD;  // Legacy format (x500 < 4.4)

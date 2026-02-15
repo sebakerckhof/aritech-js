@@ -252,21 +252,23 @@ export class AritechMonitor extends EventEmitter {
         }
         debug(`  Captured state for ${Object.keys(this.triggerStates).length} triggers`);
 
-        // Fetch door names
-        debug('Fetching door names...');
-        this.doors = await this.client.getDoorNames();
-        debug(`  Found ${this.doors.length} doors`);
+        // Fetch door names (x000 panels don't support doors)
+        if (!this.client.isX000Panel()) {
+            debug('Fetching door names...');
+            this.doors = await this.client.getDoorNames();
+            debug(`  Found ${this.doors.length} doors`);
 
-        // Fetch initial door states
-        if (this.doors.length > 0) {
-            debug('Fetching initial door states...');
-            const doorStates = await this.client.getDoorStates(this.doors.map(d => d.number));
-            for (const doorState of doorStates) {
-                this.doorStates[doorState.door] = {
-                    ...doorState,
-                };
+            // Fetch initial door states
+            if (this.doors.length > 0) {
+                debug('Fetching initial door states...');
+                const doorStates = await this.client.getDoorStates(this.doors.map(d => d.number));
+                for (const doorState of doorStates) {
+                    this.doorStates[doorState.door] = {
+                        ...doorState,
+                    };
+                }
+                debug(`  Captured state for ${Object.keys(this.doorStates).length} doors`);
             }
-            debug(`  Captured state for ${Object.keys(this.doorStates).length} doors`);
         }
 
         // Fetch filter names
@@ -470,7 +472,7 @@ export class AritechMonitor extends EventEmitter {
             }
         }
 
-        if (changeType === 'door' || changeType === 'all') {
+        if ((changeType === 'door' || changeType === 'all') && !this.client.isX000Panel()) {
             const doorResponse = await this.client.callEncrypted(constructMessage('getDoorChanges'), this.client.sessionKey);
 
             if (doorResponse && doorResponse.length >= 3 &&
@@ -531,13 +533,15 @@ export class AritechMonitor extends EventEmitter {
             await this._updateTriggerStates(allTriggerNumbers);
         }
 
-        if (changedDoors.length > 0) {
-            await this._updateDoorStates(changedDoors);
-        } else if (changeType === 'door' || changeType === 'all') {
-            // Fallback: fetch all doors if no specific bitmap
-            debug(`  No specific doors in bitmap, fetching all`);
-            const allDoorNumbers = this.doors.map(d => d.number);
-            await this._updateDoorStates(allDoorNumbers);
+        if (!this.client.isX000Panel()) {
+            if (changedDoors.length > 0) {
+                await this._updateDoorStates(changedDoors);
+            } else if (changeType === 'door' || changeType === 'all') {
+                // Fallback: fetch all doors if no specific bitmap
+                debug(`  No specific doors in bitmap, fetching all`);
+                const allDoorNumbers = this.doors.map(d => d.number);
+                await this._updateDoorStates(allDoorNumbers);
+            }
         }
     }
 

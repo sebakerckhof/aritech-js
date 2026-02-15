@@ -277,6 +277,15 @@ export class AritechClient {
     }
 
     /**
+     * Check if this is an x000 series panel.
+     * x000 panels (ATS1000, ATS2000) don't support batch status requests.
+     * @returns {boolean} True if x000 panel
+     */
+    isX000Panel() {
+        return this.panelModel && /ATS\d000/.test(this.panelModel);
+    }
+
+    /**
      * Check if this panel uses PBKDF2 key derivation.
      * Encryption mode 5 uses PBKDF2 + AES-256 with 32-byte session keys.
      * Other modes (1, 2) use grayPack key derivation with 16-byte session keys.
@@ -492,7 +501,7 @@ export class AritechClient {
      * @returns {Promise<Buffer>} Received frame
      * @throws {Error} If timeout expires
      */
-    _createResponseWaiter(timeout = 5000) {
+    _createResponseWaiter(timeout = this.isX000Panel() ? 10000 : 5000) {
         if (this.pendingResolve) {
             throw new Error('Response already pending');
         }
@@ -666,12 +675,18 @@ export class AritechClient {
 
             // Serial number
             const serial = getProperty('deviceDescription', payload, 'serialNumber');
-            if (serial && serial.match(/^[A-Za-z0-9_+-]{16}$/)) {
+            if (serial && serial.match(/^[A-Za-z0-9_+\-/]{16}$/)) {
+                // x500/x700 panels: 16-char base64 serial → decode to 6 bytes
                 this.config.serial = serial;
                 this.serialBytes = decodeSerial(serial);
+            } else if (serial && serial.match(/^[0-9A-Fa-f]{12}$/)) {
+                // x000 panels: 12-char hex serial → parse as 6 bytes directly
+                this.config.serial = serial;
+                this.serialBytes = Buffer.from(serial, 'hex');
             }
 
-            // Encryption mode - byte 79 from start of response (callPlain returns full response without CRC)
+            // Encryption mode - byte 79 in the response payload
+            // (template defines byte 78 but actual responses have it at 79)
             // Mode 1/2: grayPack + AES-128/192/256 with 16-byte session key
             // Mode 5: PBKDF2 + AES-256 with 32-byte session key
             this.encryptionMode = payload[79];
@@ -679,6 +694,7 @@ export class AritechClient {
             debug(`Panel: ${this.panelName || 'unknown'}`);
             debug(`Model: ${this.panelModel || 'unknown'} (${this.getMaxAreaCount()} areas, ${this.getMaxZoneCount()} zones max)`);
             debug(`Firmware: ${this.firmwareVersion || 'unknown'}`);
+            debug(`Serial: ${this.config.serial || 'unknown'}`);
             debug(`Protocol: ${this.protocolVersion || 'unknown'}`);
             debug(`Encryption mode: ${this.encryptionMode}`);
         } catch (e) {
@@ -1070,6 +1086,11 @@ export class AritechClient {
             return [];
         }
 
+        // x000 panels don't support batch requests
+        if (this.isX000Panel()) {
+            return this._getStatesIndividual('AREA', areaNumbers, AreaState, 'area');
+        }
+
         // Build batch request for area states
         const batchPayload = buildBatchStatRequest('AREA', areaNumbers);
 
@@ -1193,6 +1214,11 @@ export class AritechClient {
             } else {
                 requests.push(withoutHeader);
             }
+        }
+
+        if (this.isX000Panel()) {
+            debug('x000 panel detected - falling back to individual zone queries');
+            return this._getValidZoneNumbersIndividual(validAreas);
         }
 
         // Send batch request
@@ -1326,6 +1352,15 @@ export class AritechClient {
      * @returns {Promise<Array>} Array of zone objects with {number, name}
      */
     async getZoneNames() {
+        if (this.isX000Panel()) {
+            // x000 panels don't support getZonesAssignedToAreas;
+            // discover zones by iterating name pages up to maxCount
+            return this._getNames('getZoneNames', 'zoneNames', {
+                maxCount: this.getMaxZoneCount(),
+                entityName: 'Zone'
+            });
+        }
+
         // First, get the list of valid zones from the panel
         const validZoneNumbers = await this.getValidZoneNumbers();
 
@@ -1351,6 +1386,11 @@ export class AritechClient {
 
         if (zoneNumbers.length === 0) {
             return [];
+        }
+
+        // x000 panels don't support batch requests
+        if (this.isX000Panel()) {
+            return this._getStatesIndividual('ZONE', zoneNumbers, ZoneState, 'zone');
         }
 
         // Build batch request for zone states
@@ -1395,33 +1435,51 @@ export class AritechClient {
     }
 
     /**
+     * Get entity states individually (fallback for panels without batch support).
+     * @param {string} entityType - Entity type: 'ZONE', 'AREA', 'OUTPUT', 'TRIGGER', 'DOOR', 'FILTER'
+     * @param {number[]} entityNumbers - Array of entity IDs to query
+     * @param {Function} StateClass - State class with fromBytes() method
+     * @param {string} resultKey - Key name in result objects (e.g., 'zone', 'area')
+     * @returns {Promise<Array>} Array of state objects
+     * @private
+     */
+    async _getStatesIndividual(entityType, entityNumbers, StateClass, resultKey) {
+        debug(`Using individual ${entityType.toLowerCase()} state queries`);
+        const states = [];
+
+        for (const num of entityNumbers) {
+            try {
+                const payload = Buffer.concat([
+                    Buffer.from([0xC0]),
+                    buildGetStatRequest(entityType, num, false)
+                ]);
+
+                const response = await this.callEncrypted(payload, this.sessionKey);
+
+                if (response && response.length > 4 && response[4] === num) {
+                    // Strip 0xa0 response header so template byte offsets align
+                    const msgBytes = response.slice(1);
+                    const state = StateClass.fromBytes(msgBytes);
+                    states.push({
+                        [resultKey]: num,
+                        state,
+                        rawHex: response.toString('hex')
+                    });
+                }
+            } catch (e) {
+                debug(`  ${entityType} ${num}: ${e.message} (skipping)`);
+            }
+        }
+
+        return states;
+    }
+
+    /**
      * Get zone states individually (fallback when batch fails)
      * @private
      */
     async getZoneStatesIndividual(zoneNumbers) {
-        debug('Using individual zone state queries');
-        const zoneStates = [];
-
-        for (const zoneNum of zoneNumbers) {
-            // Build individual getZoneStatus request
-            const payload = Buffer.concat([
-                Buffer.from([0xC0]),
-                buildGetStatRequest('ZONE', zoneNum, false)
-            ]);
-
-            const response = await this.callEncrypted(payload, this.sessionKey);
-
-            if (response && response.length >= 7 && response[4] === zoneNum) {
-                const state = ZoneState.fromBytes(response);
-                zoneStates.push({
-                    zone: zoneNum,
-                    state,
-                    rawHex: response.toString('hex')
-                });
-            }
-        }
-
-        return zoneStates;
+        return this._getStatesIndividual('ZONE', zoneNumbers, ZoneState, 'zone');
     }
 
     /**
@@ -1649,6 +1707,11 @@ export class AritechClient {
 
         if (triggerNumbers.length === 0) return [];
 
+        // x000 panels don't support batch requests
+        if (this.isX000Panel()) {
+            return this._getStatesIndividual('TRIGGER', triggerNumbers, TriggerState, 'trigger');
+        }
+
         const batchPayload = buildBatchStatRequest('TRIGGER', triggerNumbers);
         const response = await this.callEncrypted(batchPayload, this.sessionKey);
 
@@ -1794,6 +1857,11 @@ export class AritechClient {
             : Array.from({ length: doorsOrMax }, (_, i) => i + 1);
 
         if (doorNumbers.length === 0) return [];
+
+        // x000 panels don't support batch requests
+        if (this.isX000Panel()) {
+            return this._getStatesIndividual('DOOR', doorNumbers, DoorState, 'door');
+        }
 
         const batchPayload = buildBatchStatRequest('DOOR', doorNumbers);
         const response = await this.callEncrypted(batchPayload, this.sessionKey);
@@ -1968,6 +2036,11 @@ export class AritechClient {
 
         if (outputNumbers.length === 0) return [];
 
+        // x000 panels don't support batch requests
+        if (this.isX000Panel()) {
+            return this._getStatesIndividual('OUTPUT', outputNumbers, OutputState, 'output');
+        }
+
         const batchPayload = buildBatchStatRequest('OUTPUT', outputNumbers);
         debug(`Batch requesting ${outputNumbers.length} outputs in single call`);
 
@@ -2027,6 +2100,11 @@ export class AritechClient {
             : Array.from({ length: filtersOrMax }, (_, i) => i + 1);
 
         if (filterNumbers.length === 0) return [];
+
+        // x000 panels don't support batch requests
+        if (this.isX000Panel()) {
+            return this._getStatesIndividual('FILTER', filterNumbers, FilterState, 'filter');
+        }
 
         const batchPayload = buildBatchStatRequest('FILTER', filterNumbers);
         debug(`Batch requesting ${filterNumbers.length} filters in single call`);
@@ -2426,7 +2504,7 @@ export class AritechClient {
                 // Parse the event (60 bytes for x700, 70 bytes for x500)
                 try {
                     const eventBuffer = eventData.slice(0, eventSize);
-                    const parsedEvent = parseEvent(eventBuffer);
+                    const parsedEvent = parseEvent(eventBuffer, { isX000: this.isX000Panel() });
 
                     // Use parsed sequence for end detection
                     const sequence = parsedEvent.sequence;
