@@ -10,6 +10,21 @@ function generateBitmaskProps(prefix, startByte, startIndex, endIndex) {
     return props;
 }
 
+function legacyControlSessionTemplate(msgId, msgIdBytes) {
+    return {
+        msgId,
+        msgIdBytes,
+        // x000 panels use a short two-byte area bitmap for createCC messages.
+        templateBytes: [0x00, 0x04, 0x00, 0x00],
+        payloadLength: 6,
+        properties: {
+            ...generateBitmaskProps('area', 4, 1, 16),
+            'typeId': [{ byte: 3, mask: 0xFF }],
+            'areas-1-16': [{ byte: 4, mask: 0xFF }, { byte: 5, mask: 0xFF }]
+        }
+    };
+}
+
 export const messageTemplates = {
     'createSession': {
         msgId: 120,
@@ -128,6 +143,14 @@ export const messageTemplates = {
             'areas-33-64': [{ byte: 8, mask: 0xFF }]
         }
     },
+    'createPartArmSessionLegacy': legacyControlSessionTemplate(294, [0xcc, 0x04]),
+    'createPartArm2SessionLegacy': legacyControlSessionTemplate(1062, [0xcc, 0x10]),
+    'createArmSessionLegacy': legacyControlSessionTemplate(358, [0xcc, 0x05]),
+    'createDisarmSessionLegacy': legacyControlSessionTemplate(230, [0xcc, 0x03]),
+    'createOutputControlSessionLegacy': legacyControlSessionTemplate(614, [0xcc, 0x09]),
+    'createTriggerControlSessionLegacy': legacyControlSessionTemplate(678, [0xcc, 0x0a]),
+    'createDoorControlSessionLegacy': legacyControlSessionTemplate(1382, [0xcc, 0x15]),
+    'createZoneControlSessionLegacy': legacyControlSessionTemplate(550, [0xcc, 0x08]),
     'destroyControlSession': {
         msgId: -39,
         msgIdBytes: [0xcd, 0x00],
@@ -184,18 +207,36 @@ export const messageTemplates = {
         templateBytes: [0x06, 0x0b, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
         payloadLength: 25,
         properties: {
-            'typeId': [{ byte: 3, mask: 0xFF }],
-            'canUpload': [{ byte: 4, mask: 0xFF }],
-            'canDownload': [{ byte: 5, mask: 0xFF }],
-            'canControl': [{ byte: 6, mask: 0xFF }],
-            'canMonitor': [{ byte: 7, mask: 0xFF }],
-            'canDiagnose': [{ byte: 8, mask: 0xFF }],
-            'canReadLogs': [{ byte: 9, mask: 0xFF }],
+            'typeId': [{ byte: 3, mask: 0xFF, type: 'byte' }],
+            'canUpload': [{ byte: 4, mask: 0xFF, type: 'byte' }],
+            'canDownload': [{ byte: 5, mask: 0xFF, type: 'byte' }],
+            'canControl': [{ byte: 6, mask: 0xFF, type: 'byte' }],
+            'canMonitor': [{ byte: 7, mask: 0xFF, type: 'byte' }],
+            'canDiagnose': [{ byte: 8, mask: 0xFF, type: 'byte' }],
+            'canReadLogs': [{ byte: 9, mask: 0xFF, type: 'byte' }],
             'pinCode': [{ byte: 11, mask: 0xFF, length: 10 }],  // Fixed-length field starting at byte 11
             'userPin2': [{ byte: 21, mask: 0xFF, length: 1, type: 'string' }],
             'connectionMethod': [{ byte: 22, mask: 0xFF }],
             'connectionMethodExtended': [{ byte: 23, mask: 0xFF }],
             'reservedForFutureUse': [{ byte: 24, mask: 0xFF }]
+        }
+    },
+    // x000 panels: legacy PIN login (shorter payload, no connection method tail)
+    'loginWithPinLegacy': {
+        msgId: 3,
+        msgIdBytes: [0x06],
+        // Capture: c0 06 060b06 010001010101 0a [10-byte PIN]
+        templateBytes: [0x06, 0x0b, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        payloadLength: 21,
+        properties: {
+            'typeId': [{ byte: 3, mask: 0xFF, type: 'byte' }],
+            'canUpload': [{ byte: 4, mask: 0xFF, type: 'byte' }],
+            'canDownload': [{ byte: 5, mask: 0xFF, type: 'byte' }],
+            'canControl': [{ byte: 6, mask: 0xFF, type: 'byte' }],
+            'canMonitor': [{ byte: 7, mask: 0xFF, type: 'byte' }],
+            'canDiagnose': [{ byte: 8, mask: 0xFF, type: 'byte' }],
+            'canReadLogs': [{ byte: 9, mask: 0xFF, type: 'byte' }],
+            'pinCode': [{ byte: 11, mask: 0xFF, length: 10 }]
         }
     },
     // x700 panels: Username/password login (device.getLogPassConnect)
@@ -492,6 +533,17 @@ export const messageTemplates = {
             // 32-bit bitmasks for bulk area selection (little-endian)
             'areas-1-32': [{ byte: 4, mask: 0xFF }, { byte: 5, mask: 0xFF }, { byte: 6, mask: 0xFF }, { byte: 7, mask: 0xFF }],
             'areas-33-64': [{ byte: 8, mask: 0xFF }, { byte: 9, mask: 0xFF }, { byte: 10, mask: 0xFF }, { byte: 11, mask: 0xFF }]
+        }
+    },
+    'getZonesAssignedToAreaLegacy': {
+        msgId: 36,
+        msgIdBytes: [0xc8, 0x00],
+        // x000/x500 app capture: c0 c800 0003 00 area
+        templateBytes: [0x00, 0x03, 0x00, 0x00],
+        payloadLength: 6,
+        properties: {
+            'typeId': [{ byte: 3, mask: 0xFF }],
+            'objectId': [{ byte: 5, mask: 0xFF, type: 'byte' }]
         }
     },
     'getAreaChanges': {

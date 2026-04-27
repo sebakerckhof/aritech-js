@@ -214,6 +214,10 @@ export class AritechClient {
         // Cached valid area numbers (populated by getValidAreaNumbers or area stat queries)
         this.validAreaNumbers = null;
 
+        // Cached configured trigger numbers. x000 panels expose generated names
+        // for every trigger slot, so this is inferred from non-generated names.
+        this.validTriggerNumbers = null;
+
         // Zone to areas mapping: { zoneNum: [areaNum, ...] }
         // Populated by getValidZoneNumbers when querying per-area
         this.zoneAreas = {};
@@ -277,6 +281,19 @@ export class AritechClient {
     }
 
     /**
+     * Check if this is an older x000 series panel.
+     * x000 panels use legacy login/control/status messages in the mobile app logs.
+     * @returns {boolean} True if x000 panel
+     */
+    isX000Panel() {
+        // Detection is firmware-version based: x000 panels report MR_028.x → 28,
+        // x500 firmware MR_4.x → 4011, x700 firmware similar. We deliberately
+        // do NOT fall back to encryptionMode (x500 also uses AES-128 = mode 1)
+        // or panelModel (ATS2000A is shared between x000 and x500 lineups).
+        return typeof this.protocolVersion === 'number' && this.protocolVersion < 1000;
+    }
+
+    /**
      * Check if this panel uses PBKDF2 key derivation.
      * Encryption mode 5 uses PBKDF2 + AES-256 with 32-byte session keys.
      * Other modes (1, 2) use grayPack key derivation with 16-byte session keys.
@@ -284,6 +301,88 @@ export class AritechClient {
      */
     usesPBKDF2() {
         return this.encryptionMode === 5;
+    }
+
+    _usesLegacyPinLogin() {
+        return this.isX000Panel();
+    }
+
+    _usesLegacyControlSessionFormat() {
+        return this.isX000Panel();
+    }
+
+    _supportsBatchStatusRequests() {
+        return !this.isX000Panel();
+    }
+
+    _getCreateSessionMessageName(msgName) {
+        const legacyName = `${msgName}Legacy`;
+        if (this._usesLegacyControlSessionFormat() && messageTemplates[legacyName]) {
+            return legacyName;
+        }
+        return msgName;
+    }
+
+    _isPanelError(err) {
+        return err instanceof AritechError && err.code === ErrorCodes.PANEL_ERROR;
+    }
+
+    _isKnownAreaState(areaState) {
+        const state = areaState?.state || areaState;
+        return !!state && state.toString() !== 'Unknown';
+    }
+
+    _getNumberedNamePrefix(entity) {
+        const match = entity?.name?.match(/^(.+?)\s+(\d+)$/);
+        if (!match || Number(match[2]) !== Number(entity.number)) {
+            return null;
+        }
+
+        const prefix = match[1].trim().toLowerCase();
+        return prefix || null;
+    }
+
+    _getDominantNumberedNamePrefix(entities) {
+        const prefixCounts = new Map();
+
+        for (const entity of entities) {
+            const prefix = this._getNumberedNamePrefix(entity);
+            if (!prefix) continue;
+            prefixCounts.set(prefix, (prefixCounts.get(prefix) || 0) + 1);
+        }
+
+        let dominantPrefix = null;
+        let dominantCount = 0;
+        for (const [prefix, count] of prefixCounts.entries()) {
+            if (count > dominantCount) {
+                dominantPrefix = prefix;
+                dominantCount = count;
+            }
+        }
+
+        const minimumCount = Math.max(16, Math.ceil(entities.length * 0.75));
+        return dominantCount >= minimumCount ? dominantPrefix : null;
+    }
+
+    _filterGeneratedX000TriggerNames(triggerNames) {
+        const generatedPrefix = this._getDominantNumberedNamePrefix(triggerNames);
+        if (!generatedPrefix) {
+            return triggerNames;
+        }
+
+        const filtered = triggerNames.filter(trigger => this._getNumberedNamePrefix(trigger) !== generatedPrefix);
+        debug(`x000 panel: filtered ${triggerNames.length - filtered.length} generated trigger placeholder names`);
+        return filtered;
+    }
+
+    _toEntityNumbers(value, defaultMax = 0) {
+        if (Array.isArray(value)) {
+            return value
+                .map(item => (typeof item === 'object' && item !== null) ? item.number : item)
+                .map(Number)
+                .filter(Number.isFinite);
+        }
+        return Array.from({ length: value ?? defaultMax }, (_, i) => i + 1);
     }
 
     /**
@@ -666,9 +765,13 @@ export class AritechClient {
 
             // Serial number
             const serial = getProperty('deviceDescription', payload, 'serialNumber');
-            if (serial && serial.match(/^[A-Za-z0-9_+-]{16}$/)) {
-                this.config.serial = serial;
-                this.serialBytes = decodeSerial(serial);
+            const cleanSerial = serial ? serial.replace(/\0/g, '').trim() : '';
+            if (cleanSerial.match(/^[A-Za-z0-9_+-]{16}$/)) {
+                this.config.serial = cleanSerial;
+                this.serialBytes = decodeSerial(cleanSerial);
+            } else if (cleanSerial.match(/^[0-9A-Fa-f]{12}$/)) {
+                this.config.serial = cleanSerial.toUpperCase();
+                this.serialBytes = Buffer.from(cleanSerial, 'hex');
             }
 
             // Encryption mode - byte 79 from start of response (callPlain returns full response without CRC)
@@ -792,20 +895,27 @@ export class AritechClient {
         debug('\n=== Login (PIN) ===');
         debug(`PIN: ${this.config.pin}`);
 
-        // Login message for x500 panels
+        const msgName = this._usesLegacyPinLogin() ? 'loginWithPinLegacy' : 'loginWithPin';
+
+        // Login message for PIN panels
         // Panel automatically sends COS events to all connected clients
         // userAction flags indicate requested permissions
         // connectionMethod: 3 = MobileApps (from ConnectionMethod enum)
-        const loginPayload = constructMessage('loginWithPin', {
+        const loginProps = {
             canUpload: true,
             canDownload: false,
             canControl: true,
             canMonitor: true,
             canDiagnose: true,
             canReadLogs: true,
-            pinCode: this.config.pin.toString(),
-            connectionMethod: loginType
-        });
+            pinCode: this.config.pin.toString()
+        };
+
+        if (!this._usesLegacyPinLogin()) {
+            loginProps.connectionMethod = loginType;
+        }
+
+        const loginPayload = constructMessage(msgName, loginProps);
 
         const response = await this.callEncrypted(loginPayload, this.sessionKey);
 
@@ -818,6 +928,13 @@ export class AritechClient {
         if (response[0] === HEADER.RESPONSE && response.length >= 3) {
             if (response[2] === 0x00) {
                 debug('✓ Login successful!');
+
+                try {
+                    await this._getUserInfo();
+                } catch (err) {
+                    debug(`getUserInfo after PIN login failed: ${err.message}`);
+                }
+
                 this._startKeepAlive();
                 return true;
             } else {
@@ -1034,13 +1151,118 @@ export class AritechClient {
         return results;
     }
 
+    async _getEntityStatesBatch(entityType, entityNumbers, responseName, StateClass, resultKey) {
+        const batchPayload = buildBatchStatRequest(entityType, entityNumbers);
+
+        debug(`Batch requesting ${entityNumbers.length} ${resultKey} states`);
+        debug(`Batch request (${batchPayload.length} bytes): ${batchPayload.toString('hex')}`);
+
+        const response = await this.callEncrypted(batchPayload, this.sessionKey);
+
+        if (!response || response.length < 4) {
+            debug(`No valid batch response for ${resultKey} states`);
+            return [];
+        }
+
+        const messages = splitBatchResponse(response, responseName);
+        if (messages.length === 0) {
+            debug(`No ${resultKey} messages parsed from batch response`);
+            return [];
+        }
+
+        const states = [];
+        for (const msg of messages) {
+            states.push({
+                [resultKey]: msg.objectId,
+                state: StateClass.fromBytes(msg.bytes),
+                rawHex: msg.bytes.toString('hex')
+            });
+        }
+
+        debug(`Batch received ${states.length} ${resultKey} states`);
+        return states;
+    }
+
+    async _getEntityStatesIndividual(entityType, entityNumbers, responseName, StateClass, resultKey) {
+        debug(`Using individual ${resultKey} state queries`);
+
+        const states = [];
+        for (const entityNum of entityNumbers) {
+            const payload = Buffer.concat([
+                Buffer.from([HEADER.REQUEST]),
+                buildGetStatRequest(entityType, entityNum, false)
+            ]);
+
+            let response;
+            try {
+                response = await this.callEncrypted(payload, this.sessionKey);
+            } catch (err) {
+                if (this._isPanelError(err)) {
+                    debug(`Panel rejected ${resultKey} ${entityNum} status: ${err.message}`);
+                    continue;
+                }
+                throw err;
+            }
+
+            if (!response || response[0] !== HEADER.RESPONSE || !isMessageType(response, responseName, 1)) {
+                debug(`Unexpected ${resultKey} ${entityNum} status response: ${response ? response.toString('hex') : 'none'}`);
+                continue;
+            }
+
+            const msgBytes = response.slice(1);
+            const objectId = msgBytes[3] || entityNum;
+            states.push({
+                [resultKey]: objectId,
+                state: StateClass.fromBytes(msgBytes),
+                rawHex: msgBytes.toString('hex')
+            });
+        }
+
+        debug(`Individual queries received ${states.length} ${resultKey} states`);
+        return states;
+    }
+
+    async _getEntityStatesWithFallback(entityType, entityNumbers, responseName, StateClass, resultKey) {
+        if (entityNumbers.length === 0) {
+            return [];
+        }
+
+        if (!this._supportsBatchStatusRequests()) {
+            return this._getEntityStatesIndividual(entityType, entityNumbers, responseName, StateClass, resultKey);
+        }
+
+        try {
+            const states = await this._getEntityStatesBatch(entityType, entityNumbers, responseName, StateClass, resultKey);
+            if (states.length > 0) {
+                return states;
+            }
+            debug(`Falling back to individual ${resultKey} status queries`);
+        } catch (err) {
+            if (!this._isPanelError(err)) {
+                throw err;
+            }
+            debug(`Batch ${resultKey} status request rejected, falling back to individual queries: ${err.message}`);
+        }
+
+        return this._getEntityStatesIndividual(entityType, entityNumbers, responseName, StateClass, resultKey);
+    }
+
     /**
      * Get area names from the panel.
      * @returns {Promise<Array>} Array of area objects with {number, name}
      */
     async getAreaNames() {
+        let validNumbers = null;
+        if (this.isX000Panel()) {
+            validNumbers = await this.getValidAreaNumbers();
+            if (!validNumbers || validNumbers.length === 0) {
+                return [];
+            }
+        }
+
         return this._getNames('getAreaNames', 'areaNames', {
             maxCount: this.getMaxAreaCount(),
+            validNumbers,
             entityName: 'Area'
         });
     }
@@ -1053,58 +1275,19 @@ export class AritechClient {
      * @returns {Promise<Array>} Array of area state objects
      */
     async getAreaStates(areasOrMax = 4) {
-        debug('\n=== Querying Area States (Batch) ===');
+        debug('\n=== Querying Area States ===');
 
         // Accept either:
         // - A number (max areas to query, 1 to N)
         // - An array of area numbers [1, 2, 3]
         // - An array of area objects [{number: 1, name: "..."}, ...]
-        let areaNumbers;
-        if (Array.isArray(areasOrMax)) {
-            areaNumbers = areasOrMax.map(a => typeof a === 'object' ? a.number : a);
-        } else {
-            areaNumbers = Array.from({ length: areasOrMax }, (_, i) => i + 1);
+        const areaNumbers = this._toEntityNumbers(areasOrMax);
+        const areaStates = await this._getEntityStatesWithFallback('AREA', areaNumbers, 'areaStatus', AreaState, 'area');
+
+        if (this.isX000Panel()) {
+            return areaStates.filter(areaState => this._isKnownAreaState(areaState));
         }
 
-        if (areaNumbers.length === 0) {
-            return [];
-        }
-
-        // Build batch request for area states
-        const batchPayload = buildBatchStatRequest('AREA', areaNumbers);
-
-        debug(`Batch requesting ${areaNumbers.length} area states`);
-
-        const response = await this.callEncrypted(batchPayload, this.sessionKey);
-
-        if (!response || response.length < 4) {
-            debug('No valid batch response for area states');
-            return [];
-        }
-
-        // Use splitBatchResponse to parse (like C# AdvancedControlPanel.Split)
-        const messages = splitBatchResponse(response, 'areaStatus');
-
-        if (messages.length === 0) {
-            debug(`No messages parsed from batch response: ${response.slice(0, 8).toString('hex')}...`);
-            return [];
-        }
-
-        const areaStates = [];
-
-        for (const msg of messages) {
-            // msg.bytes is the raw embedded message (without a0 header)
-            // msg.objectId is extracted from byte 3 of the message
-            const state = AreaState.fromBytes(msg.bytes);
-
-            areaStates.push({
-                area: msg.objectId,
-                state,
-                rawHex: msg.bytes.toString('hex')
-            });
-        }
-
-        debug(`Batch received ${areaStates.length} area states`);
         return areaStates;
     }
 
@@ -1121,6 +1304,20 @@ export class AritechClient {
         }
 
         debug('\n=== Querying Valid Area Numbers ===');
+
+        // x000 panels return a broad valid-area bitmap. Probe status instead and
+        // keep only areas that respond with a meaningful state.
+        if (this.isX000Panel()) {
+            const areaNumbers = Array.from({ length: this.getMaxAreaCount() }, (_, i) => i + 1);
+            const areaStates = await this._getEntityStatesIndividual('AREA', areaNumbers, 'areaStatus', AreaState, 'area');
+            const validAreas = areaStates
+                .filter(areaState => this._isKnownAreaState(areaState))
+                .map(areaState => areaState.area);
+
+            debug(`x000 panel: found ${validAreas.length} valid areas by status: ${validAreas.join(', ')}`);
+            this.validAreaNumbers = validAreas;
+            return validAreas;
+        }
 
         // x700 panels don't support getValidAreas command - use all areas based on model
         if (this.isX700Panel()) {
@@ -1171,10 +1368,14 @@ export class AritechClient {
         debug('\n=== Querying Valid Zone Numbers ===');
 
         // Get valid areas (from cache or query)
-        const validAreas = await this.getValidAreaNumbers();
+        let validAreas = await this.getValidAreaNumbers();
         if (!validAreas || validAreas.length === 0) {
             debug('No valid areas found');
             return null;
+        }
+
+        if (this.isX000Panel()) {
+            return this._getValidZoneNumbersLegacy(validAreas);
         }
 
         // Build batch request - one getZonesAssignedToAreas per area
@@ -1201,7 +1402,16 @@ export class AritechClient {
         const lengthByte = Buffer.from([0x0c]); // getZonesAssignedToAreas messages are 12 bytes
         const payload = Buffer.concat([batchMsg, lengthByte, ...requests]);
         debug(`Zone batch payload (${payload.length} bytes): ${payload.toString('hex')}`);
-        const response = await this.callEncrypted(payload, this.sessionKey);
+        let response;
+        try {
+            response = await this.callEncrypted(payload, this.sessionKey);
+        } catch (err) {
+            if (this._isPanelError(err)) {
+                debug(`Zone batch request rejected, falling back to individual queries: ${err.message}`);
+                return this._getValidZoneNumbersIndividual(validAreas);
+            }
+            throw err;
+        }
 
         if (!response || response.length < 4) {
             debug('No valid batch response for zones');
@@ -1269,6 +1479,58 @@ export class AritechClient {
     }
 
     /**
+     * x000 panels use c8 00 to ask for the zone bitmap of one area at a time.
+     * @private
+     */
+    async _getValidZoneNumbersLegacy(validAreas) {
+        debug('Using legacy x000 zone assignment queries');
+
+        this.zoneAreas = {};
+        const validZonesSet = new Set();
+
+        for (const areaNum of validAreas) {
+            const payload = constructMessage('getZonesAssignedToAreaLegacy', { objectId: areaNum });
+            let response;
+
+            try {
+                response = await this.callEncrypted(payload, this.sessionKey);
+            } catch (err) {
+                if (this._isPanelError(err)) {
+                    debug(`Panel rejected legacy zone assignment for area ${areaNum}: ${err.message}`);
+                    continue;
+                }
+                throw err;
+            }
+
+            if (!response || response[0] !== HEADER.RESPONSE || response[1] !== 0x20 || response[2] !== 0x02) {
+                debug(`Unexpected legacy zone assignment response for area ${areaNum}: ${response ? response.toString('hex') : 'none'}`);
+                continue;
+            }
+
+            const responseArea = response[4] || areaNum;
+            const bitset = response.slice(5);
+            for (let byteIdx = 0; byteIdx < bitset.length; byteIdx++) {
+                for (let bit = 0; bit < 8; bit++) {
+                    if (bitset[byteIdx] & (1 << bit)) {
+                        const zoneNum = byteIdx * 8 + bit + 1;
+                        validZonesSet.add(zoneNum);
+
+                        if (!this.zoneAreas[zoneNum]) {
+                            this.zoneAreas[zoneNum] = [];
+                        }
+                        this.zoneAreas[zoneNum].push(responseArea);
+                    }
+                }
+            }
+        }
+
+        const validZones = Array.from(validZonesSet).sort((a, b) => a - b);
+        debug(`Found ${validZones.length} valid zones: ${validZones.join(', ')}`);
+        debug(`Zone-to-areas mapping: ${JSON.stringify(this.zoneAreas)}`);
+        return validZones;
+    }
+
+    /**
      * Fallback: query zones for each area individually (slower but more compatible)
      * @private
      */
@@ -1280,7 +1542,16 @@ export class AritechClient {
 
         for (const areaNum of validAreas) {
             const payload = buildGetValidZonesMessage([areaNum]);
-            const response = await this.callEncrypted(payload, this.sessionKey);
+            let response;
+            try {
+                response = await this.callEncrypted(payload, this.sessionKey);
+            } catch (err) {
+                if (this._isPanelError(err)) {
+                    debug(`Panel rejected zone assignment for area ${areaNum}: ${err.message}`);
+                    continue;
+                }
+                throw err;
+            }
 
             if (!response) {
                 debug(`No response for area ${areaNum}`);
@@ -1343,55 +1614,10 @@ export class AritechClient {
      * @returns {Promise<Array>} Array of zone state objects
      */
     async getZoneStates(zonesOrMax = 24) {
-        debug('\n=== Querying Zone States (Batch) ===');
+        debug('\n=== Querying Zone States ===');
 
-        const zoneNumbers = Array.isArray(zonesOrMax)
-            ? zonesOrMax.map(z => z.number)
-            : Array.from({ length: zonesOrMax }, (_, i) => i + 1);
-
-        if (zoneNumbers.length === 0) {
-            return [];
-        }
-
-        // Build batch request for zone states
-        const batchPayload = buildBatchStatRequest('ZONE', zoneNumbers);
-
-        debug(`Batch requesting ${zoneNumbers.length} zones in single call`);
-        debug(`Batch request (${batchPayload.length} bytes): ${batchPayload.toString('hex')}`);
-
-        const response = await this.callEncrypted(batchPayload, this.sessionKey);
-
-        if (!response || response.length < 4) {
-            debug('No valid batch response, falling back to individual queries');
-            return this.getZoneStatesIndividual(zoneNumbers);
-        }
-
-        debug(`Batch response (${response.length} bytes): ${response.toString('hex')}`);
-
-        // Use splitBatchResponse to parse (like C# AdvancedControlPanel.Split)
-        const messages = splitBatchResponse(response, 'zoneStatus');
-
-        if (messages.length === 0) {
-            debug(`No messages parsed from batch, falling back to individual queries`);
-            return this.getZoneStatesIndividual(zoneNumbers);
-        }
-
-        const zoneStates = [];
-
-        for (const msg of messages) {
-            // msg.bytes is the raw embedded message (without a0 header)
-            // msg.objectId is extracted from byte 3 of the message
-            const state = ZoneState.fromBytes(msg.bytes);
-
-            zoneStates.push({
-                zone: msg.objectId,
-                state,
-                rawHex: msg.bytes.toString('hex')
-            });
-        }
-
-        debug(`Batch received ${zoneStates.length} zone states`);
-        return zoneStates;
+        const zoneNumbers = this._toEntityNumbers(zonesOrMax);
+        return this._getEntityStatesWithFallback('ZONE', zoneNumbers, 'zoneStatus', ZoneState, 'zone');
     }
 
     /**
@@ -1399,29 +1625,7 @@ export class AritechClient {
      * @private
      */
     async getZoneStatesIndividual(zoneNumbers) {
-        debug('Using individual zone state queries');
-        const zoneStates = [];
-
-        for (const zoneNum of zoneNumbers) {
-            // Build individual getZoneStatus request
-            const payload = Buffer.concat([
-                Buffer.from([0xC0]),
-                buildGetStatRequest('ZONE', zoneNum, false)
-            ]);
-
-            const response = await this.callEncrypted(payload, this.sessionKey);
-
-            if (response && response.length >= 7 && response[4] === zoneNum) {
-                const state = ZoneState.fromBytes(response);
-                zoneStates.push({
-                    zone: zoneNum,
-                    state,
-                    rawHex: response.toString('hex')
-                });
-            }
-        }
-
-        return zoneStates;
+        return this._getEntityStatesIndividual('ZONE', this._toEntityNumbers(zoneNumbers), 'zoneStatus', ZoneState, 'zone');
     }
 
     /**
@@ -1469,8 +1673,9 @@ export class AritechClient {
      * @param {number|string} entityId - Entity ID for error messages
      */
     async _withControlSession(createMsgName, createProps, actionFn, entityType, entityId) {
-        debug(`  Creating ${createMsgName}...`);
-        const createPayload = constructMessage(createMsgName, createProps);
+        const actualCreateMsgName = this._getCreateSessionMessageName(createMsgName);
+        debug(`  Creating ${actualCreateMsgName}...`);
+        const createPayload = constructMessage(actualCreateMsgName, createProps);
         const response = await this.callEncrypted(createPayload, this.sessionKey);
 
         const ccResponse = parseCreateCCResponse(response);
@@ -1482,7 +1687,7 @@ export class AritechClient {
         }
 
         const { sessionId } = ccResponse;
-        debug(`  ✓ ${createMsgName} succeeded, sessionId: 0x${sessionId.toString(16)}`);
+        debug(`  ✓ ${actualCreateMsgName} succeeded, sessionId: 0x${sessionId.toString(16)}`);
 
         try {
             await actionFn(sessionId);
@@ -1630,9 +1835,31 @@ export class AritechClient {
      * @returns {Promise<Array>} Array of trigger objects with {number, name}
      */
     async getTriggerNames() {
-        return this._getNames('getTriggerNames', 'triggerNames', {
+        const triggerNames = await this._getNames('getTriggerNames', 'triggerNames', {
             entityName: 'Trigger'
         });
+
+        if (!this.isX000Panel()) {
+            return triggerNames;
+        }
+
+        const configuredTriggers = this._filterGeneratedX000TriggerNames(triggerNames);
+        this.validTriggerNumbers = configuredTriggers.map(trigger => trigger.number);
+        debug(`x000 panel: inferred ${configuredTriggers.length} configured triggers: ${this.validTriggerNumbers.join(', ') || 'none'}`);
+        return configuredTriggers;
+    }
+
+    /**
+     * Get configured trigger numbers.
+     * @returns {Promise<number[]>} Array of trigger numbers
+     */
+    async getValidTriggerNumbers() {
+        if (Array.isArray(this.validTriggerNumbers)) {
+            return this.validTriggerNumbers;
+        }
+
+        const triggerNames = await this.getTriggerNames();
+        return triggerNames.map(trigger => trigger.number);
     }
 
     /**
@@ -1641,37 +1868,17 @@ export class AritechClient {
      * @returns {Promise<Array>} Array of trigger state objects
      */
     async getTriggerStates(triggersOrMax = 8) {
-        debug('\n=== Querying Trigger States (Batch) ===');
+        debug('\n=== Querying Trigger States ===');
 
-        const triggerNumbers = Array.isArray(triggersOrMax)
-            ? (typeof triggersOrMax[0] === 'object' ? triggersOrMax.map(t => t.number) : triggersOrMax)
-            : Array.from({ length: triggersOrMax }, (_, i) => i + 1);
-
-        if (triggerNumbers.length === 0) return [];
-
-        const batchPayload = buildBatchStatRequest('TRIGGER', triggerNumbers);
-        const response = await this.callEncrypted(batchPayload, this.sessionKey);
-
-        if (!response || response.length < 4) return [];
-
-        const messages = splitBatchResponse(response, 'triggerStatus');
-        if (messages.length === 0) {
-            debug(`No messages parsed from batch response`);
-            return [];
+        let triggerNumbers;
+        if (this.isX000Panel() && !Array.isArray(triggersOrMax) && triggersOrMax > 16) {
+            triggerNumbers = await this.getValidTriggerNumbers();
+            debug(`x000 panel: limiting broad trigger status query to configured triggers: ${triggerNumbers.join(', ') || 'none'}`);
+        } else {
+            triggerNumbers = this._toEntityNumbers(triggersOrMax);
         }
 
-        const triggerStates = [];
-        for (const msg of messages) {
-            const state = TriggerState.fromBytes(msg.bytes);
-            triggerStates.push({
-                trigger: msg.objectId,
-                state,
-                rawHex: msg.bytes.toString('hex')
-            });
-        }
-
-        debug(`Batch received ${triggerStates.length} trigger states`);
-        return triggerStates;
+        return this._getEntityStatesWithFallback('TRIGGER', triggerNumbers, 'triggerStatus', TriggerState, 'trigger');
     }
 
     /**
@@ -1787,37 +1994,10 @@ export class AritechClient {
      * @returns {Promise<Array>} Array of door state objects
      */
     async getDoorStates(doorsOrMax = 8) {
-        debug('\n=== Querying Door States (Batch) ===');
+        debug('\n=== Querying Door States ===');
 
-        const doorNumbers = Array.isArray(doorsOrMax)
-            ? (typeof doorsOrMax[0] === 'object' ? doorsOrMax.map(d => d.number) : doorsOrMax)
-            : Array.from({ length: doorsOrMax }, (_, i) => i + 1);
-
-        if (doorNumbers.length === 0) return [];
-
-        const batchPayload = buildBatchStatRequest('DOOR', doorNumbers);
-        const response = await this.callEncrypted(batchPayload, this.sessionKey);
-
-        if (!response || response.length < 4) return [];
-
-        const messages = splitBatchResponse(response, 'doorStatus');
-        if (messages.length === 0) {
-            debug(`No messages parsed from batch response`);
-            return [];
-        }
-
-        const doorStates = [];
-        for (const msg of messages) {
-            const state = DoorState.fromBytes(msg.bytes);
-            doorStates.push({
-                door: msg.objectId,
-                state,
-                rawHex: msg.bytes.toString('hex')
-            });
-        }
-
-        debug(`Batch received ${doorStates.length} door states`);
-        return doorStates;
+        const doorNumbers = this._toEntityNumbers(doorsOrMax);
+        return this._getEntityStatesWithFallback('DOOR', doorNumbers, 'doorStatus', DoorState, 'door');
     }
 
     /**
@@ -1960,42 +2140,10 @@ export class AritechClient {
      * @returns {Promise<Array>} Array of output state objects
      */
     async getOutputStates(outputsOrMax = 8) {
-        debug('\n=== Querying Output States (Batch) ===');
+        debug('\n=== Querying Output States ===');
 
-        const outputNumbers = Array.isArray(outputsOrMax)
-            ? outputsOrMax
-            : Array.from({ length: outputsOrMax }, (_, i) => i + 1);
-
-        if (outputNumbers.length === 0) return [];
-
-        const batchPayload = buildBatchStatRequest('OUTPUT', outputNumbers);
-        debug(`Batch requesting ${outputNumbers.length} outputs in single call`);
-
-        const response = await this.callEncrypted(batchPayload, this.sessionKey);
-
-        if (!response || response.length < 4) {
-            debug('No valid batch response');
-            return [];
-        }
-
-        const messages = splitBatchResponse(response, 'outputStatus');
-        if (messages.length === 0) {
-            debug(`No messages parsed from batch response`);
-            return [];
-        }
-
-        const outputStates = [];
-        for (const msg of messages) {
-            const state = OutputState.fromBytes(msg.bytes);
-            outputStates.push({
-                output: msg.objectId,
-                state,
-                rawHex: msg.bytes.toString('hex')
-            });
-        }
-
-        debug(`Batch received ${outputStates.length} output states`);
-        return outputStates;
+        const outputNumbers = this._toEntityNumbers(outputsOrMax);
+        return this._getEntityStatesWithFallback('OUTPUT', outputNumbers, 'outputStatus', OutputState, 'output');
     }
 
     // ========================================================================
@@ -2020,42 +2168,10 @@ export class AritechClient {
      * @returns {Promise<Array>} Array of filter state objects
      */
     async getFilterStates(filtersOrMax = 64) {
-        debug('\n=== Querying Filter States (Batch) ===');
+        debug('\n=== Querying Filter States ===');
 
-        const filterNumbers = Array.isArray(filtersOrMax)
-            ? (typeof filtersOrMax[0] === 'object' ? filtersOrMax.map(f => f.number) : filtersOrMax)
-            : Array.from({ length: filtersOrMax }, (_, i) => i + 1);
-
-        if (filterNumbers.length === 0) return [];
-
-        const batchPayload = buildBatchStatRequest('FILTER', filterNumbers);
-        debug(`Batch requesting ${filterNumbers.length} filters in single call`);
-
-        const response = await this.callEncrypted(batchPayload, this.sessionKey);
-
-        if (!response || response.length < 4) {
-            debug('No valid batch response');
-            return [];
-        }
-
-        const messages = splitBatchResponse(response, 'filterStatus');
-        if (messages.length === 0) {
-            debug(`No messages parsed from batch response`);
-            return [];
-        }
-
-        const filterStates = [];
-        for (const msg of messages) {
-            const state = FilterState.fromBytes(msg.bytes);
-            filterStates.push({
-                filter: msg.objectId,
-                state,
-                rawHex: msg.bytes.toString('hex')
-            });
-        }
-
-        debug(`Batch received ${filterStates.length} filter states`);
-        return filterStates;
+        const filterNumbers = this._toEntityNumbers(filtersOrMax);
+        return this._getEntityStatesWithFallback('FILTER', filterNumbers, 'filterStatus', FilterState, 'filter');
     }
 
     /**
@@ -2098,31 +2214,22 @@ export class AritechClient {
             'part2': CC_STATUS.PartSet2Inhibited
         };
 
-        // Step 1: Create control context with area bitmask
         const areaProps = {};
         for (const area of areaList) {
             areaProps[`area.${area}`] = true;
         }
-        const createPayload = constructMessage(createMsgName, areaProps);
-        debug(`Step 1: Sending ${createMsgName}: ${createPayload.toString('hex')}`);
-        const createResponse = await this.callEncrypted(createPayload, this.sessionKey);
 
-        const ccResponse = parseCreateCCResponse(createResponse);
-        if (!ccResponse) {
-            throw new AritechError(`Failed to create control context for arm operation`, {
-                code: ErrorCodes.CREATE_CC_FAILED,
-                details: { response: createResponse ? createResponse.toString('hex') : null }
-            });
-        }
-
-        const sessionId = ccResponse.sessionId;
-        debug(`✓ createArmSession succeeded, sessionId: 0x${sessionId.toString(16)}`);
-
-        try {
+        await this._withControlSession(createMsgName, areaProps, async (sessionId) => {
             // Step 2: Start arm procedure
             debug(`Step 2: Starting arm procedure (armAreas)`);
             const setAreasPayload = constructMessage('armAreas', { sessionId: sessionId });
-            await this.callEncrypted(setAreasPayload, this.sessionKey);
+            const setAreasResponse = await this.callEncrypted(setAreasPayload, this.sessionKey);
+            if (parseReturnBool(setAreasResponse) !== true) {
+                throw new AritechError('Failed to start arm procedure', {
+                    code: ErrorCodes.ARM_FAILED,
+                    details: { areas: areaList, response: setAreasResponse ? setAreasResponse.toString('hex') : null }
+                });
+            }
             debug(`✓ armAreas sent`);
 
             // Step 3: Poll status and handle force scenarios
@@ -2260,13 +2367,7 @@ export class AritechClient {
                 code: ErrorCodes.ARM_FAILED,
                 status: lastStatus
             });
-
-        } finally {
-            // Step 4: Cleanup - always destroy control context
-            debug(`Step 4: Cleanup control context...`);
-            await this.callEncrypted(constructMessage('destroyControlSession', { sessionId: sessionId }), this.sessionKey);
-            debug(`✓ Cleanup complete`);
-        }
+        }, 'area', areaList.join(','));
     }
 
     /**
@@ -2318,34 +2419,20 @@ export class AritechClient {
     async disarmArea(areaNumber) {
         debug(`\n=== Disarming Area ${areaNumber} ===`);
 
-        // Step 1: createDisarmSession
-        const payload = constructMessage('createDisarmSession', { [`area.${areaNumber}`]: true });
-        debug(`Step 1: Sending createDisarmSession: ${payload.toString('hex')}`);
-        let response = await this.callEncrypted(payload, this.sessionKey);
-
-        const ccResponse = parseCreateCCResponse(response);
-        if (!ccResponse) {
-            throw new AritechError('Failed to create control context for disarm operation', {
-                code: ErrorCodes.CREATE_CC_FAILED,
-                details: { response: response ? response.toString('hex') : null }
-            });
-        }
-
-        const sessionId = ccResponse.sessionId;
-        debug(`✓ createDisarmSession succeeded, sessionId: 0x${sessionId.toString(16)}`);
-
-        try {
-            // Step 2: Send disarmAreas
+        await this._withControlSession('createDisarmSession', { [`area.${areaNumber}`]: true }, async (sessionId) => {
+            debug(`  Calling disarmAreas...`);
             const fnPayload = constructMessage('disarmAreas', { sessionId: sessionId });
-            debug(`Step 2: Sending disarmAreas: ${fnPayload.toString('hex')}`);
-            await this.callEncrypted(fnPayload, this.sessionKey);
-            debug(`✓ disarmAreas succeeded`);
-        } finally {
-            // Step 3: Cleanup - always destroy control context
-            debug(`Step 3: Cleanup control context...`);
-            await this.callEncrypted(constructMessage('destroyControlSession', { sessionId: sessionId }), this.sessionKey);
-            debug(`✓ Cleanup complete`);
-        }
+            const response = await this.callEncrypted(fnPayload, this.sessionKey);
+
+            if (parseReturnBool(response) !== true) {
+                throw new AritechError(`Failed to disarm area ${areaNumber}`, {
+                    code: ErrorCodes.DISARM_FAILED,
+                    details: { areaNumber, response: response ? response.toString('hex') : null }
+                });
+            }
+
+            debug(`  ✓ Area ${areaNumber} disarmed successfully!`);
+        }, 'area', areaNumber);
     }
 
     /**

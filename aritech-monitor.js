@@ -192,6 +192,12 @@ export class AritechMonitor extends EventEmitter {
         debug('Enabling event notifications...');
         await this.client.callEncrypted(constructMessage('getUserInfo'), this.client.sessionKey);
 
+        // x000 panels: monitor areas, zones, and triggers — skip outputs, doors, filters.
+        const limitedX000 = this.client.isX000Panel?.() === true;
+        if (limitedX000) {
+            debug('x000 panel detected — monitoring areas, zones, triggers only');
+        }
+
         // Fetch zone names
         debug('Fetching zone names...');
         this.zones = await this.client.getZoneNames();
@@ -222,20 +228,22 @@ export class AritechMonitor extends EventEmitter {
         }
         debug(`  Captured state for ${Object.keys(this.areaStates).length} areas`);
 
-        // Fetch output names
-        debug('Fetching output names...');
-        this.outputs = await this.client.getOutputNames();
-        debug(`  Found ${this.outputs.length} outputs`);
+        if (!limitedX000) {
+            // Fetch output names
+            debug('Fetching output names...');
+            this.outputs = await this.client.getOutputNames();
+            debug(`  Found ${this.outputs.length} outputs`);
 
-        // Fetch initial output states
-        debug('Fetching initial output states...');
-        const outputStates = await this.client.getOutputStates(this.outputs.map(o => o.number));
-        for (const outputState of outputStates) {
-            this.outputStates[outputState.output] = {
-                ...outputState,
-            };
+            // Fetch initial output states
+            debug('Fetching initial output states...');
+            const outputStates = await this.client.getOutputStates(this.outputs.map(o => o.number));
+            for (const outputState of outputStates) {
+                this.outputStates[outputState.output] = {
+                    ...outputState,
+                };
+            }
+            debug(`  Captured state for ${Object.keys(this.outputStates).length} outputs`);
         }
-        debug(`  Captured state for ${Object.keys(this.outputStates).length} outputs`);
 
         // Fetch trigger names
         debug('Fetching trigger names...');
@@ -244,7 +252,7 @@ export class AritechMonitor extends EventEmitter {
 
         // Fetch initial trigger states
         debug('Fetching initial trigger states...');
-        const triggerStates = await this.client.getTriggerStates(this.triggers.map(t => t.number));
+        const triggerStates = await this.client.getTriggerStates(this.triggers);
         for (const triggerState of triggerStates) {
             this.triggerStates[triggerState.trigger] = {
                 ...triggerState,
@@ -252,38 +260,40 @@ export class AritechMonitor extends EventEmitter {
         }
         debug(`  Captured state for ${Object.keys(this.triggerStates).length} triggers`);
 
-        // Fetch door names
-        debug('Fetching door names...');
-        this.doors = await this.client.getDoorNames();
-        debug(`  Found ${this.doors.length} doors`);
+        if (!limitedX000) {
+            // Fetch door names
+            debug('Fetching door names...');
+            this.doors = await this.client.getDoorNames();
+            debug(`  Found ${this.doors.length} doors`);
 
-        // Fetch initial door states
-        if (this.doors.length > 0) {
-            debug('Fetching initial door states...');
-            const doorStates = await this.client.getDoorStates(this.doors.map(d => d.number));
-            for (const doorState of doorStates) {
-                this.doorStates[doorState.door] = {
-                    ...doorState,
-                };
+            // Fetch initial door states
+            if (this.doors.length > 0) {
+                debug('Fetching initial door states...');
+                const doorStates = await this.client.getDoorStates(this.doors.map(d => d.number));
+                for (const doorState of doorStates) {
+                    this.doorStates[doorState.door] = {
+                        ...doorState,
+                    };
+                }
+                debug(`  Captured state for ${Object.keys(this.doorStates).length} doors`);
             }
-            debug(`  Captured state for ${Object.keys(this.doorStates).length} doors`);
-        }
 
-        // Fetch filter names
-        debug('Fetching filter names...');
-        this.filters = await this.client.getFilterNames();
-        debug(`  Found ${this.filters.length} filters`);
+            // Fetch filter names
+            debug('Fetching filter names...');
+            this.filters = await this.client.getFilterNames();
+            debug(`  Found ${this.filters.length} filters`);
 
-        // Fetch initial filter states
-        if (this.filters.length > 0) {
-            debug('Fetching initial filter states...');
-            const filterStates = await this.client.getFilterStates(this.filters.map(f => f.number));
-            for (const filterState of filterStates) {
-                this.filterStates[filterState.filter] = {
-                    ...filterState,
-                };
+            // Fetch initial filter states
+            if (this.filters.length > 0) {
+                debug('Fetching initial filter states...');
+                const filterStates = await this.client.getFilterStates(this.filters.map(f => f.number));
+                for (const filterState of filterStates) {
+                    this.filterStates[filterState.filter] = {
+                        ...filterState,
+                    };
+                }
+                debug(`  Captured state for ${Object.keys(this.filterStates).length} filters`);
             }
-            debug(`  Captured state for ${Object.keys(this.filterStates).length} filters`);
         }
 
         // Emit initialized event
@@ -347,6 +357,9 @@ export class AritechMonitor extends EventEmitter {
         debug(`Status byte: 0x${statusByte?.toString(16).padStart(2, '0') || '??'}`);
         debug(`Payload: ${payload?.toString('hex') || 'none'}`);
 
+        // x000 panels: monitor areas, zones, and triggers — skip outputs, doors, filters.
+        const limitedX000 = this.client.isX000Panel?.() === true;
+
         // Parse COS payload to determine what changed
         // Format: 30 00 TT 00 00 00 00 00
         //   TT: 01 = zone, 02 = area, 07 = output, 14 = trigger, ff = all
@@ -368,6 +381,14 @@ export class AritechMonitor extends EventEmitter {
                 changeType = 'door';
             }
             debug(`  Change type: ${changeType}`);
+        }
+
+        const X000_SUPPORTED_CHANGE_TYPES = new Set(['area', 'zone', 'trigger', 'all']);
+        if (limitedX000 && !X000_SUPPORTED_CHANGE_TYPES.has(changeType)) {
+            debug(`  Skipping ${changeType} change (x000 panel: outputs/doors/filters not monitored)`);
+            // Still send ack so the panel doesn't keep resending.
+            this.client.sendEncrypted(buildCOSAcknowledgment(), this.client.sessionKey);
+            return;
         }
 
         // Send acknowledgment using helper
@@ -422,7 +443,7 @@ export class AritechMonitor extends EventEmitter {
             }
         }
 
-        if (changeType === 'output' || changeType === 'all') {
+        if (!limitedX000 && (changeType === 'output' || changeType === 'all')) {
             const outputResponse = await this.client.callEncrypted(constructMessage('getOutputChanges'), this.client.sessionKey);
 
             if (outputResponse && outputResponse.length >= 3 &&
@@ -438,7 +459,7 @@ export class AritechMonitor extends EventEmitter {
             }
         }
 
-        if (changeType === 'filter' || changeType === 'all') {
+        if (!limitedX000 && (changeType === 'filter' || changeType === 'all')) {
             const filterResponse = await this.client.callEncrypted(constructMessage('getFilterChanges'), this.client.sessionKey);
 
             if (filterResponse && filterResponse.length >= 3 &&
@@ -470,7 +491,7 @@ export class AritechMonitor extends EventEmitter {
             }
         }
 
-        if (changeType === 'door' || changeType === 'all') {
+        if (!limitedX000 && (changeType === 'door' || changeType === 'all')) {
             const doorResponse = await this.client.callEncrypted(constructMessage('getDoorChanges'), this.client.sessionKey);
 
             if (doorResponse && doorResponse.length >= 3 &&
@@ -506,7 +527,7 @@ export class AritechMonitor extends EventEmitter {
 
         if (changedOutputs.length > 0) {
             await this._updateOutputStates(changedOutputs);
-        } else if (changeType === 'output' || changeType === 'all') {
+        } else if (!limitedX000 && (changeType === 'output' || changeType === 'all')) {
             // Fallback: fetch all outputs if no specific bitmap
             debug(`  No specific outputs in bitmap, fetching all`);
             const allOutputNumbers = this.outputs.map(o => o.number);
@@ -515,7 +536,7 @@ export class AritechMonitor extends EventEmitter {
 
         if (changedFilters.length > 0) {
             await this._updateFilterStates(changedFilters);
-        } else if (changeType === 'filter' || changeType === 'all') {
+        } else if (!limitedX000 && (changeType === 'filter' || changeType === 'all')) {
             // Fallback: fetch all filters if no specific bitmap
             debug(`  No specific filters in bitmap, fetching all`);
             const allFilterNumbers = this.filters.map(f => f.number);
@@ -533,7 +554,7 @@ export class AritechMonitor extends EventEmitter {
 
         if (changedDoors.length > 0) {
             await this._updateDoorStates(changedDoors);
-        } else if (changeType === 'door' || changeType === 'all') {
+        } else if (!limitedX000 && (changeType === 'door' || changeType === 'all')) {
             // Fallback: fetch all doors if no specific bitmap
             debug(`  No specific doors in bitmap, fetching all`);
             const allDoorNumbers = this.doors.map(d => d.number);

@@ -67,7 +67,7 @@ const configFromArgs = parseConfigArgs(allArgs);
 const CONFIG = { ...configFromFile, ...configFromArgs };
 
 // Validate required configuration fields
-// For x500 panels: host, port, pin, encryptionKey
+// For x000/x500 panels: host, port, pin, encryptionKey
 // For x700 panels: host, port, username, encryptionKey (password defaults to username)
 const hasLoginCredentials = CONFIG.pin || CONFIG.username;
 const requiredFields = ['host', 'port', 'encryptionKey'];
@@ -81,7 +81,7 @@ if (missingFields.length > 0) {
   console.error('\n❌ Error: Missing required configuration fields:');
   missingFields.forEach(field => console.error(`   - ${field}`));
   console.error('\nPlease provide missing fields either in config.json or via CLI arguments.');
-  console.error('x500 panels: aritech --host 192.168.1.1 --pin 1278 --encryptionKey <key> zones');
+  console.error('x000/x500 panels: aritech --host 192.168.1.1 --pin 1278 --encryptionKey <key> zones');
   console.error('x700 panels: aritech --host 192.168.1.1 --username ADMIN --password SECRET --encryptionKey <key> zones');
   process.exit(1);
 }
@@ -128,7 +128,7 @@ if (!command) {
   console.log('  --port <port>            - Panel port number');
   console.log('  --encryptionKey <key>    - Encryption key (24-48 chars)');
   console.log('');
-  console.log('  x500 panels:');
+  console.log('  x000/x500 panels:');
   console.log('  --pin <pin>              - User PIN code');
   console.log('');
   console.log('  x700 panels:');
@@ -674,7 +674,7 @@ try {
 
       if (triggers.length > 0) {
         console.log('Querying trigger states...');
-        const states = await client.getTriggerStates(triggers.map(t => t.number));
+        const states = await client.getTriggerStates(triggers);
 
         // Merge names with states
         const merged = triggers.map(trigger => {
@@ -956,5 +956,3 @@ try {
     await client.disconnect();
   }
 }
-
-

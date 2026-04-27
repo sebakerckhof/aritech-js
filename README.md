@@ -8,6 +8,7 @@ An unofficial, community-developed JavaScript client to monitor and control KGS 
 
 This library supports the ACE 2 ATS version 6 protocol, which works with Advisor Advanced panels:
 
+- **x000 panels**: ATS1000A, ATS2000A (legacy PIN login, AES-128, individual status requests)
 - **x500 panels**: ATS1500A, ATS2000A, ATS3500A, ATS4500A (PIN-based login, AES-192)
 - **x700 (everon) panels**: ATS1500A-IP-MM, ATS3500A-IP-MM, ATS4500A-IP-MM (username/password login, AES-256)
 
@@ -19,7 +20,7 @@ Note that protocol behavior may vary based on panel firmware version. This libra
 
 Clone the repository and create a `config.json` file based on your panel type:
 
-**For x500 panels (ATS1500A, ATS2000A, ATS3500A, ATS4500A):**
+**For x000/x500 panels (ATS1000A, ATS1500A, ATS2000A, ATS3500A, ATS4500A):**
 
 Copy `config.x500.json.example` to `config.json` and edit with your settings:
 
@@ -125,7 +126,7 @@ Examples:
 ### Basic
 - ✅ Connect to panel and retrieve panel description
 - ✅ Session key exchange
-- ✅ Login with PIN code (x500 panels)
+- ✅ Login with PIN code (x000/x500 panels)
 - ✅ Login with username/password (x700 panels)
 - ✅ Read event log
 
@@ -141,7 +142,7 @@ Examples:
 - ✅ Monitor change events for zones
 - ✅ Inhibit / uninhibit zones
 
-### Outputs
+### Outputs (not on X000 panels)
 - ✅ Read output names
 - ✅ Read output states
 - ✅ Monitor change events for outputs
@@ -158,8 +159,9 @@ When using an installer pin you have to specify the login type as:
 - ✅ Read trigger states
 - ✅ Monitor change events for triggers
 - ✅ Activate / Deactivate triggers
+- ✅ Filter generated x000 trigger placeholders from configured trigger lists
 
-### Doors
+### Doors (not on x000 panels)
 - ✅ Read door names
 - ✅ Read door states
 - ✅ Monitor change events for triggers
@@ -167,7 +169,7 @@ When using an installer pin you have to specify the login type as:
 - ✅ Lock / Unlock doors
 - ✅ Timed and standard time unlock
 
-### Filters
+### Filters (not on x000 panels)
 - ✅ Read filter names
 - ✅ Read filter states (read-only, on/off)
 - ✅ Monitor change events for filters
