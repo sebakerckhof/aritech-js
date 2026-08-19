@@ -596,6 +596,14 @@ export class AritechClient {
             throw new Error('Response already pending');
         }
 
+        // Waiters are always created before the request is sent, so anything
+        // already queued is a late response to an earlier (timed-out) request.
+        // Consuming it would shift every later call one response out of sync.
+        if (this.responseQueue.length > 0) {
+            debug(`Discarding ${this.responseQueue.length} stale response frame(s)`);
+            this.responseQueue.length = 0;
+        }
+
         return new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
                 this.pendingResolve = null;
@@ -605,13 +613,6 @@ export class AritechClient {
                 clearTimeout(timer);
                 resolve(frame);
             };
-
-            if (this.responseQueue.length > 0 && this.pendingResolve) {
-                const responseFrame = this.responseQueue.shift();
-                const pending = this.pendingResolve;
-                this.pendingResolve = null;
-                pending(responseFrame);
-            }
         });
     }
 
