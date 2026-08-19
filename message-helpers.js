@@ -387,6 +387,12 @@ export function splitBatchResponse(templates, response, expectedTemplate) {
         if (template && response[0] === HEADER_RESPONSE) {
             // For single response, strip the a0 header and extract objectId from byte 3
             const msgBytes = response.slice(1);
+            // Without this the bit layout of `expectedTemplate` would be applied to
+            // any successful response, turning unrelated bytes into status flags.
+            const expectedMsgIdByte = template.msgIdBytes?.[0];
+            if (expectedMsgIdByte && msgBytes[0] !== expectedMsgIdByte) {
+                return [];
+            }
             const objectId = msgBytes[3];
             return [{
                 template: expectedTemplate,

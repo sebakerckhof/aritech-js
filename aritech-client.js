@@ -184,6 +184,10 @@ export const ErrorCodes = {
 // CLIENT
 // ============================================================================
 
+const KEEP_ALIVE_INTERVAL_MS = 30000;
+// Consecutive failed pings before the session is considered dead.
+const KEEP_ALIVE_MAX_FAILURES = 3;
+
 export class AritechClient {
     constructor(config) {
         this.config = config;
@@ -224,6 +228,7 @@ export class AritechClient {
 
         // Keep-alive interval (started after login, stopped on disconnect)
         this.keepAliveInterval = null;
+        this.keepAliveFailures = 0;
     }
 
     /**
@@ -596,6 +601,14 @@ export class AritechClient {
             throw new Error('Response already pending');
         }
 
+        // Waiters are always created before the request is sent, so anything
+        // already queued is a late response to an earlier (timed-out) request.
+        // Consuming it would shift every later call one response out of sync.
+        if (this.responseQueue.length > 0) {
+            debug(`Discarding ${this.responseQueue.length} stale response frame(s)`);
+            this.responseQueue.length = 0;
+        }
+
         return new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
                 this.pendingResolve = null;
@@ -605,13 +618,6 @@ export class AritechClient {
                 clearTimeout(timer);
                 resolve(frame);
             };
-
-            if (this.responseQueue.length > 0 && this.pendingResolve) {
-                const responseFrame = this.responseQueue.shift();
-                const pending = this.pendingResolve;
-                this.pendingResolve = null;
-                pending(responseFrame);
-            }
         });
     }
 
@@ -1027,16 +1033,25 @@ export class AritechClient {
     _startKeepAlive() {
         if (this.keepAliveInterval) return; // Already running
 
+        this.keepAliveFailures = 0;
         this.keepAliveInterval = setInterval(async () => {
             if (!this.sessionKey || !this.socket) return;
 
             try {
                 const aliveMsg = constructMessage('ping', {});
                 await this.callEncrypted(aliveMsg, this.sessionKey);
+                this.keepAliveFailures = 0;
             } catch (err) {
-                debug(`Keep-alive failed: ${err.message}`);
+                this.keepAliveFailures += 1;
+                debug(`Keep-alive failed (${this.keepAliveFailures}/${KEEP_ALIVE_MAX_FAILURES}): ${err.message}`);
+                // A dead session leaves the TCP socket open, so nothing else
+                // would notice. Drop it so the reconnect logic takes over.
+                if (this.keepAliveFailures >= KEEP_ALIVE_MAX_FAILURES) {
+                    this._stopKeepAlive();
+                    this.socket?.destroy(new Error('Keep-alive failed; panel session appears dead'));
+                }
             }
-        }, 30000); // Every 30 seconds
+        }, KEEP_ALIVE_INTERVAL_MS);
     }
 
     /**
@@ -1048,6 +1063,7 @@ export class AritechClient {
             clearInterval(this.keepAliveInterval);
             this.keepAliveInterval = null;
         }
+        this.keepAliveFailures = 0;
     }
 
     /**
