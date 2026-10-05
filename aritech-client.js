@@ -766,7 +766,7 @@ export class AritechClient {
             // Serial number
             const serial = getProperty('deviceDescription', payload, 'serialNumber');
             const cleanSerial = serial ? serial.replace(/\0/g, '').trim() : '';
-            if (cleanSerial.match(/^[A-Za-z0-9_+-]{16}$/)) {
+            if (cleanSerial.match(/^[A-Za-z0-9_+\/-]{16}$/)) {
                 this.config.serial = cleanSerial;
                 this.serialBytes = decodeSerial(cleanSerial);
             } else if (cleanSerial.match(/^[0-9A-Fa-f]{12}$/)) {
