@@ -712,3 +712,39 @@ export default {
     buildGetEventLogMessage,
     createHelperMethods
 };
+
+// Event categories in return.sysevent (offsets into the full response incl. 0xA0 header and 0x20 msg id)
+const SYS_EVENT_CATEGORIES = [
+    [9, 0x01, 'FAULT'], [9, 0x02, 'MAINS'], [9, 0x04, 'ACTZN'], [9, 0x08, 'ACT24H'],
+    [9, 0x10, 'ACTLCD'], [9, 0x20, 'ACTDEV'], [9, 0x40, 'ALARMS_NCNF'], [9, 0x80, 'ALARMS_CNF'],
+    [10, 0x01, 'FAULTS_NCNF'], [10, 0x02, 'FAULTS_CNF'], [10, 0x10, 'WALK_REQ'], [10, 0x20, 'WALK_OK'],
+    [10, 0x40, 'SYSTEM']
+];
+
+/**
+ * Parse a return.sysevent response (answer to getActiveZones/getFaultZones/getInhibitedZones
+ * during an arm procedure). Verified on an ATS1500:
+ * a0 20 01 01 9c 01 00 00 00 04 00 00 01 00 16 00 1f ... = zone 22 (classId 1), area 1, ACTZN.
+ * @param {Buffer} response
+ * @returns {{objectNumber:number, classId:number, eventTypeId:number, eventUniqueId:number,
+ *   areas:number[], categories:string[], raw:string}|null} null when not a sysevent
+ */
+export function parseSysEvent(response) {
+    if (!response || response.length < 17 || response[0] !== 0xA0 || response[1] !== 0x20) return null;
+    const bits = (start, count, offset) => {
+        const out = [];
+        for (let i = 0; i < count && start + i < response.length; i++) {
+            for (let b = 0; b < 8; b++) if (response[start + i] & (1 << b)) out.push(offset + i * 8 + b + 1);
+        }
+        return out;
+    };
+    return {
+        objectNumber: response[14] | (response[15] << 8),
+        classId: response[12],
+        eventTypeId: response[16],
+        eventUniqueId: response[4],
+        areas: [...bits(5, 4, 0), ...(response.length >= 21 ? bits(17, 4, 32) : [])],
+        categories: SYS_EVENT_CATEGORIES.filter(([i, m]) => response[i] & m).map(([, , name]) => name),
+        raw: response.toString('hex')
+    };
+}

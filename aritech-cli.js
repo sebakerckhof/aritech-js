@@ -351,13 +351,13 @@ try {
             console.log(`  Status: 0x${err.status.toString(16).padStart(4, '0')}`);
           }
           if (err.details?.faults?.length > 0) {
-            console.log(`  Faults: ${err.details.faults.length} zone(s)`);
+            console.log(`  Faults: ${err.details.faults.map((z) => z.objectNumber).join(', ')}`);
           }
           if (err.details?.activeZones?.length > 0) {
-            console.log(`  Active zones: ${err.details.activeZones.length} zone(s)`);
+            console.log(`  Active zones: ${err.details.activeZones.map((z) => z.objectNumber).join(', ')}`);
           }
           if (err.details?.inhibitedZones?.length > 0) {
-            console.log(`  Inhibited zones: ${err.details.inhibitedZones.length} zone(s)`);
+            console.log(`  Inhibited zones: ${err.details.inhibitedZones.map((z) => z.objectNumber).join(', ')}`);
           }
           if (!force) {
             console.log('  Use --force to arm anyway');

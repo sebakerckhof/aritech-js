@@ -95,11 +95,12 @@ export const messageTemplates = {
             'areas-33-64': [{ byte: 8, mask: 0xFF }]
         }
     },
+    // createCC.OUTPUT (0xcc 0x0e). 0xcc 0x09 is createCC.DEVICE on x500/x700 panels.
     'createOutputControlSession': {
-        msgId: 614,
-        msgIdBytes: [0xcc, 0x09],
-        templateBytes: [0x00, 0x04, 0x0f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
-        payloadLength: 12,
+        msgId: 934,
+        msgIdBytes: [0xcc, 0x0e],
+        templateBytes: [0x00, 0x04, 0x00, 0x00, 0x00, 0x00],
+        payloadLength: 8,
         properties: {
             ...generateBitmaskProps('area', 4, 1, 64),
             'typeId': [{ byte: 3, mask: 0xFF }],
@@ -300,37 +301,40 @@ export const messageTemplates = {
             'sessionId': [{ byte: 4, mask: 0xFF }, { byte: 5, mask: 0xFF }]
         }
     },
+    // Zone info during arming (fnCC.A_SET_GETACTIVE / GETFAULT / GETINHIB): session id at
+    // bytes 4-5 like the other session commands, then `next` (0 = first, 1 = following).
+    // Verified on an ATS1500; the earlier layout (session at 5-6) got a panel error.
     'getActiveZones': {
         msgId: -5480,
         msgIdBytes: [0xcf, 0x55],
-        templateBytes: [0x21, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
-        payloadLength: 8,
+        templateBytes: [0x21, 0x00, 0x00, 0x00, 0x00],
+        payloadLength: 7,
         properties: {
             'typeId': [{ byte: 3, mask: 0xFF }],
-            'sessionId': [{ byte: 5, mask: 0xFF }, { byte: 6, mask: 0xFF }],
-            'next': [{ byte: 7, mask: 0xFF }]
+            'sessionId': [{ byte: 4, mask: 0xFF }, { byte: 5, mask: 0xFF }],
+            'next': [{ byte: 6, mask: 0xFF }]
         }
     },
     'getFaultZones': {
         msgId: -5288,
         msgIdBytes: [0xcf, 0x52],
-        templateBytes: [0x21, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
-        payloadLength: 8,
+        templateBytes: [0x21, 0x00, 0x00, 0x00, 0x00],
+        payloadLength: 7,
         properties: {
             'typeId': [{ byte: 3, mask: 0xFF }],
-            'sessionId': [{ byte: 5, mask: 0xFF }, { byte: 6, mask: 0xFF }],
-            'next': [{ byte: 7, mask: 0xFF }]
+            'sessionId': [{ byte: 4, mask: 0xFF }, { byte: 5, mask: 0xFF }],
+            'next': [{ byte: 6, mask: 0xFF }]
         }
     },
     'getInhibitedZones': {
         msgId: -5608,
         msgIdBytes: [0xcf, 0x57],
-        templateBytes: [0x21, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
-        payloadLength: 8,
+        templateBytes: [0x21, 0x00, 0x00, 0x00, 0x00],
+        payloadLength: 7,
         properties: {
             'typeId': [{ byte: 3, mask: 0xFF }],
-            'sessionId': [{ byte: 5, mask: 0xFF }, { byte: 6, mask: 0xFF }],
-            'next': [{ byte: 7, mask: 0xFF }]
+            'sessionId': [{ byte: 4, mask: 0xFF }, { byte: 5, mask: 0xFF }],
+            'next': [{ byte: 6, mask: 0xFF }]
         }
     },
     'armAreas': {

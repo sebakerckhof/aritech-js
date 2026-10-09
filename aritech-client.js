@@ -9,7 +9,7 @@
 
 import net from 'net';
 import { parseEvent } from './event-parser.js';
-import { createHelperMethods } from './message-helpers.js';
+import { createHelperMethods, parseSysEvent } from './message-helpers.js';
 import { messageTemplates } from './messages.js';
 import {
     SLIP_END,
@@ -2295,7 +2295,7 @@ export class AritechClient {
                     }
                     // Read fault zones and throw
                     faults = await this._readArmIssues(sessionId, 'getFaultZones');
-                    throw new AritechError('Arm failed - zone faults detected', {
+                    throw new AritechError(`Arm failed - zone faults detected: ${AritechClient._describeZones(faults)}`, {
                         code: ErrorCodes.ARM_FAULTS,
                         status: stateId,
                         details: { faults }
@@ -2324,7 +2324,7 @@ export class AritechClient {
                     }
                     // Read active zones and throw
                     activeZones = await this._readArmIssues(sessionId, 'getActiveZones');
-                    throw new AritechError('Arm failed - active zones detected', {
+                    throw new AritechError(`Arm failed - active zones detected: ${AritechClient._describeZones(activeZones)}`, {
                         code: ErrorCodes.ARM_ACTIVE_ZONES,
                         status: stateId,
                         details: { activeZones }
@@ -2354,7 +2354,7 @@ export class AritechClient {
                     }
                     // Read inhibited zones and throw
                     inhibitedZones = await this._readArmIssues(sessionId, 'getInhibitedZones');
-                    throw new AritechError('Arm failed - inhibited zones detected', {
+                    throw new AritechError(`Arm failed - inhibited zones detected: ${AritechClient._describeZones(inhibitedZones)}`, {
                         code: ErrorCodes.ARM_INHIBITED,
                         status: stateId,
                         details: { inhibitedZones }
@@ -2375,6 +2375,8 @@ export class AritechClient {
      * @private
      */
     async _readArmIssues(sessionId, messageName) {
+        // The panel answers each request with a return.sysevent (one zone) and ends the
+        // list with return.void or an error response.
         const issues = [];
         let next = 0;
 
@@ -2384,31 +2386,25 @@ export class AritechClient {
             try {
                 response = await this.callEncrypted(payload, this.sessionKey);
             } catch (err) {
-                // Panel may return error when no issues to report
                 debug(`  ${messageName}: ${err.message}`);
                 break;
             }
 
-            if (!response || response.length < 3) break;
-
-            // Check if response is booleanResponse (end of list)
-            if (isMessageType(response, 'booleanResponse', 1)) {
-                break;
-            }
-
-            // Parse zone info from response (simplified - would need return.sysevent template)
-            if (response.length >= 5) {
-                issues.push({
-                    raw: response.toString('hex'),
-                    index: i
-                });
-            }
-
-            next = 1;  // Continue reading
+            const event = parseSysEvent(response);
+            if (!event) break;  // return.void / booleanResponse / error: end of list
+            issues.push(event);
+            next = 1;
         }
 
-        debug(`  Read ${issues.length} ${messageName.split('_').pop().toLowerCase()} zones`);
+        debug(`  Read ${issues.length} ${messageName} zones`);
         return issues;
+    }
+
+    /** 'zone 22' / 'zones 22, 4' for error messages. */
+    static _describeZones(issues) {
+        const numbers = issues.map((i) => i.objectNumber);
+        if (numbers.length === 0) return '(zones unknown)';
+        return (numbers.length === 1 ? 'zone ' : 'zones ') + numbers.join(', ');
     }
 
     /**
