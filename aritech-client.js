@@ -799,7 +799,7 @@ export class AritechClient {
         if (this.usesPBKDF2()) {
             debug(`Encryption mode ${this.encryptionMode} - using PBKDF2 key derivation (AES-256)`);
             this.initialKey = makeEncryptionKeyPBKDF2(this.config.encryptionKey);
-            debug(`New initial key (32 bytes): ${this.initialKey.toString('hex')}`);
+            debug('New initial key derived (32 bytes)');
         }
 
         return {
@@ -820,7 +820,7 @@ export class AritechClient {
      */
     async changeSessionKey() {
         debug('\n=== Key Exchange ===');
-        debug(`Initial key: ${this.initialKey.toString('hex')}`);
+        debug(`Initial key: ${this.initialKey.length} bytes`);
 
         // 1. Send createSession with client key contribution
         // PBKDF2 mode (5): 16-byte client key → 32-byte session key (AES-256)
@@ -845,15 +845,15 @@ export class AritechClient {
         if (this.usesPBKDF2()) {
             // PBKDF2 mode: extract 16-byte panel key, build 32-byte session key
             const panelKeyBytes = beginResponse.slice(3, 19);
-            debug(`Panel key bytes (16): ${panelKeyBytes.toString('hex')}`);
+            debug('Panel key bytes received (16)');
             this.sessionKey = Buffer.concat([clientKeyBytes, panelKeyBytes]);
-            debug(`Session key (32 bytes): ${this.sessionKey.toString('hex')}`);
+            debug('Session key established (32 bytes)');
         } else {
             // grayPack mode: extract 8-byte panel key, build 16-byte session key
             const panelKeyBytes = beginResponse.slice(3, 11);
-            debug(`Panel key bytes (8): ${panelKeyBytes.toString('hex')}`);
+            debug('Panel key bytes received (8)');
             this.sessionKey = Buffer.concat([clientKeyBytes, panelKeyBytes]);
-            debug(`Session key (16 bytes): ${this.sessionKey.toString('hex')}`);
+            debug('Session key established (16 bytes)');
         }
 
         // 3. Send enableEncryptionKey (still with initial key!)
@@ -893,7 +893,7 @@ export class AritechClient {
      */
     async loginWithPin(loginType = LOGIN_TYPE.USER) {
         debug('\n=== Login (PIN) ===');
-        debug(`PIN: ${this.config.pin}`);
+        debug('Logging in with PIN');
 
         const msgName = this._usesLegacyPinLogin() ? 'loginWithPinLegacy' : 'loginWithPin';
 
